@@ -125,7 +125,7 @@ So, it is strongly recommended, to remount filesystems read-only, or use LVM sna
 For example:
   lvcreate --size 10G --snapshot --name sync-mytome /dev/vgroup/mytome
   basyn --local=/dev/vgroup/sync-mytome --remote=/dev/vcopies/mytome --host=10.0.0.1 --action=PUSH --mode=SYNC
-  lvremove --force /dev/vgroup/mytome
+  lvremove --force /dev/vgroup/sync-mytome
 
 Even this - is not a solution to every possible trouble. You have to notice what activity is done at source device, because snapshot can be ALREADY inconsistent without stopping of some process, flushing cache, etc. You have to plan "data freezing" well by yourself.
 
