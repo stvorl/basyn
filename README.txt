@@ -13,7 +13,7 @@ First device ("local device") is always local. Second device ("remote device") c
 
 There are two possible actions:
 1. PUSH, when data is transferred from local device to remote.
-2. POP, which puts data to local device from remote (which is not implemented at the moment, but I am planning to implement it soon)
+2. PULL, which writes data to local device from remote.
 
 And two possible modes:
 1. COPY. Data is sequentially copied block-by-block. Is is usable for first-time synchronization to reduce read operations and CPU load on receiving side.
@@ -45,8 +45,8 @@ Options (* for mandatory, = for value):
    -u  --user=      - Remote user for SSH connection. If omitted, current local user is presumed.
    -a  --action=    - One of the actions:
                       PUSH - use local device as source, remote - as destination;
-                      POP  - use remote device as source, local - as destination.
-                      If omitted, no data will be transferred. Only device existence will be performed.
+                      PULL  - use remote device as source, local - as destination.
+                      If omitted, no data will be transferred. Only device existence check will be performed.
  * -m  --mode=      - One of synchronization modes (mandatory if any --action selected):
                       SYNC - copy only changed blocks, detected by parallel hash computation and comparison;
                       COPY - copy whole data (usable for first time).
