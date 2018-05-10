@@ -25,12 +25,13 @@ import os.path
 import hashlib
 
 # Command code constants
-CMD_INIT_PUSH = 100
+CMD_INIT = 100
 CMD_QUIT = 255
 CMD_HASH = 10
 CMD_SUBHASH = 11
 CMD_READ = 12
-CMD_WRITE = 13
+CMD_SUBREAD = 13
+CMD_WRITE = 14
 
 
 # SLAVE MODE SECTION
@@ -61,6 +62,7 @@ def slaveMode():
     localFile = None
 
     lastHashBuffer = ''
+    lastPosition = 0
 
     try:
         # Waiting for command and trying to handle it
@@ -71,8 +73,8 @@ def slaveMode():
             if cmdCode == CMD_QUIT:
                 break
 
-            # INIT_PUSH command. It gets device file name, hash name, opens the file and returns size
-            elif cmdCode == CMD_INIT_PUSH:
+            # INIT command. It gets device file name, hash name, opens the file and returns size
+            elif cmdCode == CMD_INIT:
                 # Reading all necessary integers
                 (fileNameLength, hashNameLength, bufferSize, chunkSize, compLevel) = struct.unpack('<QQQQB',
                                                                                                    cin.read(8 * 4 + 1))
@@ -86,7 +88,7 @@ def slaveMode():
                     exit(0)
 
                 # Opening file and determining device size, available for writing
-                localFile = open(fileName, 'rb+')
+                localFile = open(fileName, 'r+b')
                 localFile.seek(0, 2)
                 localSize = localFile.tell()
                 localFile.seek(0)
@@ -106,6 +108,7 @@ def slaveMode():
                 while bytesLeft > 0:
                     bytesToRead = min(bytesLeft, bufferSize)
                     lastHashBuffer = localFile.read(bytesToRead)
+                    lastPosition = position
                     hashFunc.update(lastHashBuffer)
                     bytesLeft -= bytesToRead
 
@@ -136,9 +139,28 @@ def slaveMode():
             # CMD_READ reads data from given position and length, compresses and returns it to the master
             elif cmdCode == CMD_READ:
                 (position, length) = struct.unpack('<QQ', cin.read(8 * 2))
-                localFile.seek(position)
-                compBuffer = zlib.compress(localFile.read(length), compLevel)
 
+                # May we use cached data?
+                if position == lastPosition and len(lastHashBuffer) == length and lastHashBuffer != '':
+                    buf = lastHashBuffer
+                else:
+                    localFile.seek(position)
+                    buf = localFile.read(length)
+
+                compBuffer = zlib.compress(buf, compLevel)
+
+                sendOk()
+                cout.write(struct.pack('<Q', len(compBuffer)))  # Compressed data length
+                cout.write(compBuffer)  # Compressed data
+                cout.flush()
+
+            # CMD_SUBREAD reads i-th chunk from lastHashBuffer, read by CMD_HASH
+            elif cmdCode == CMD_SUBREAD:
+                length = len(lastHashBuffer)
+                (i,) = struct.unpack('<Q', cin.read(8))
+
+                buf = lastHashBuffer[chunkSize * i:min(length, chunkSize * (i + 1))]
+                compBuffer = zlib.compress(buf, compLevel)
                 sendOk()
                 cout.write(struct.pack('<Q', len(compBuffer)))  # Compressed data length
                 cout.write(compBuffer)  # Compressed data
@@ -247,8 +269,8 @@ Options (* for mandatory, = for value):
    -u  --user=      - Remote user for SSH connection. If omitted, current local user is presumed.
    -a  --action=    - One of the actions:
                       PUSH - use local device as source, remote - as destination;
-                      POP  - use remote device as source, local - as destination.
-                      If omitted, no data will be transferred. Only device existence will be performed.
+                      PULL  - use remote device as source, local - as destination.
+                      If omitted, no data will be transferred. Only device existence check will be performed.
  * -m  --mode=      - One of synchronization modes (mandatory if any --action selected):
                       SYNC - copy only changed blocks, detected by parallel hash computation and comparison;
                       COPY - copy whole data (usable for first time).
@@ -323,7 +345,7 @@ Options (* for mandatory, = for value):
             raise SettingsParseError("Option must be provided: -l/--local")
         if not self.remotePath:
             raise SettingsParseError("Option must be provided: -r/--remote")
-        if self.action not in ("", "PUSH", "POP"):
+        if self.action not in ("", "PUSH", "PULL"):
             raise SettingsParseError("Unknown action - '%s'" % (self.action,))
         if self.action and self.mode not in ("COPY", "SYNC"):
             raise SettingsParseError("Unknown mode - '%s' for action '%s'" % (self.mode, self.action))
@@ -396,27 +418,30 @@ def masterMode():
         # Start time measurement
         startTime = getTime()
 
-        with open(settings.localPath, 'r') as localFile:
+        with open(settings.localPath, 'r+b') as localFile:
             localFile.seek(0, 2)
             localSize = localFile.tell()
             localFile.seek(0)
-            if settings.verbose:
-                logVerbose('Local device %s size is %iB' % (settings.localPath, localSize))
 
             remoteSize = initRemoteDevice(io, settings)
-            if settings.verbose:
-                logVerbose('Remote device %s size is %iB' % (settings.remotePath, remoteSize))
 
-            # Error if zero size
-            if min(localSize, remoteSize) == 0:
-                raise ActionError('One of the devices is size 0. There is nothing to sync.')
+            size = min(localSize, remoteSize)
 
-                # Doing requested action
-            if settings.action == "PUSH":
-                doPushAction(io, settings, localFile, localSize, remoteSize)
+            doSizeCheck(settings, localSize, remoteSize)
 
-            elif settings.action == "POP":
-                doPopAction(io, settings, localFile, localSize, remoteSize)
+            # Doing requested action
+            if settings.action != "":
+                if settings.verbose:
+                    logVerbose('Starting to %s / %s data with buffer size %iB' % (settings.action, settings.mode,
+                                                                                  settings.bufferSize,))
+
+                if settings.mode == "SYNC":
+                    doSync(io, settings, localFile, size)
+                elif settings.mode == "COPY":
+                    doCopy(io, settings, localFile, size)
+
+                if settings.verbose:
+                    logVerbose('%s / %s finished' % (settings.action, settings.mode))
 
             elif settings.verbose:
                 logVerbose('No action requested')
@@ -471,7 +496,7 @@ def prepareSlave(settings):
             if "# END SLAVE MODE" in line:
                 break
             if line[0][0] == '#':
-                # TODO: more complicated comment and whiteline skip
+                # TODO: more complicated comment and white-line skip
                 continue
             lines.append(line)
 
@@ -513,7 +538,7 @@ def prepareSlave(settings):
 # Initializes remote device for slave process and returns measured size.
 def initRemoteDevice(io, settings):
     # Sending the part of the settings
-    sendCommand(io, CMD_INIT_PUSH)
+    sendCommand(io, CMD_INIT)
     io.write(struct.pack("<QQQQB", len(settings.remotePath), len(settings.hashName), settings.bufferSize,
                          settings.chunkSize, settings.zipLevel))
     io.write(settings.remotePath)
@@ -526,137 +551,200 @@ def initRemoteDevice(io, settings):
     return remoteSize
 
 
-# PUSHes data from localPath to remotePath using io wrapper for slave process
-def doPushAction(io, settings, localFile, localSize, remoteSize):
-    # Check is there enough size on the remote device
-    if remoteSize < localSize:
-        raise ActionError('Remote device size (%i) is smaller than local (%i)' % (remoteSize, localSize))
+# Check is there enough size on the receiving device
+def doSizeCheck(settings, localSize, remoteSize):
+    if settings.verbose:
+        logVerbose('Local device %s size is %iB' % (settings.localPath, localSize))
+        logVerbose('Remote device %s size is %iB' % (settings.remotePath, remoteSize))
 
-    if settings.mode == "SYNC":
-        if settings.verbose:
-            logVerbose('Starting to PUSH / SYNC data with buffer size %iB' % (settings.bufferSize,))
+    if min(localSize, remoteSize) == 0:
+        raise ActionError('One of the devices is size 0. There is nothing to sync.')
 
-        localFile.seek(0)
-        while localFile.tell() < localSize:
-            currentPosition = localFile.tell()
-            length = min(settings.bufferSize, localSize - currentPosition)
+    if settings.action == "PUSH" and remoteSize < localSize:
+        raise ActionError(
+            'Cannot PUSH because remote device size (%i) is smaller than local (%i)' % (remoteSize, localSize))
 
-            # An order for slave to read remote data and compute hash
-            sendCommand(io, CMD_HASH)
-            io.write(struct.pack("<QQ", currentPosition, length))
+    if settings.action == "PULL" and remoteSize > localSize:
+        raise ActionError(
+            'Cannot PULL because remote device size (%i) is greater than local (%i)' % (remoteSize, localSize))
 
-            # Reading local data and computing hash
-            buf = localFile.read(length)
-            localDigest = hashlib.new(settings.hashName, buf).digest()
 
-            # Waiting for slave to respond and getting remote hash
-            checkCommand(io)
-            remoteDigest = io.read(settings.digestSize)
+def doSync(io, settings, localFile, size):
+    localFile.seek(0)
+    while localFile.tell() < size:
+        currentPosition = localFile.tell()
+        length = min(settings.bufferSize, size - currentPosition)
 
-            if settings.debug:
-                logDebug('Checking pos %d. Local hash is %s, remote is %s' % (currentPosition,
-                                                                              byteToHex(localDigest),
-                                                                              byteToHex(remoteDigest)))
+        # An order for slave to read remote data and compute hash
+        sendCommand(io, CMD_HASH)
+        io.write(struct.pack("<QQ", currentPosition, length))
 
-            # Checking if local and remote hashes match each other, and, if not, writing data buffer to remote
-            if remoteDigest != localDigest:
-                # Straight sync with big buffer (no chunks)
-                if settings.chunkSize == 0:
-                    # Compressing data
+        # Reading local data and computing hash
+        buf = localFile.read(length)
+        localDigest = hashlib.new(settings.hashName, buf).digest()
+
+        # Waiting for slave to respond and getting remote hash
+        checkCommand(io)
+        remoteDigest = io.read(settings.digestSize)
+
+        if settings.debug:
+            logDebug('Checking pos %d. Local hash is %s, remote is %s' % (currentPosition,
+                                                                          byteToHex(localDigest),
+                                                                          byteToHex(remoteDigest)))
+
+        # Checking if local and remote hashes match each other, and, if not, transferring the data buffer
+        if remoteDigest != localDigest:
+            # Straight syncing with big buffer (no chunks)
+            if settings.chunkSize == 0:
+                if settings.action == "PUSH":
+                    # Compressing buffer
                     compBuffer = zlib.compress(buf, settings.zipLevel)
                     compLength = len(compBuffer)
 
-                    # Writing it to remote device
-                    if settings.debug:
-                        logDebug('Writing buffer (raw:%iB, comp:%iB) to pos %i' % (length, compLength, currentPosition))
+                    # Writing it to remote
                     sendCommand(io, CMD_WRITE)
                     io.write(struct.pack("<QQ", currentPosition, compLength))
                     io.write(compBuffer)
                     checkCommand(io)
 
-                # Sync with chunks
-                else:
-                    chunkCount = int(length / settings.chunkSize)
-                    if length % settings.chunkSize > 0:
-                        chunkCount += 1
-                    getChunk = lambda n: buf[settings.chunkSize * n:min(length, settings.chunkSize * (n + 1))]
-
+                    # Debug logging
                     if settings.debug:
-                        logDebug('Splitting buffer at %i with length %i for %i chunks for detailed check' % (
-                            currentPosition, length, chunkCount))
+                        logDebug('Transferred local->remote raw:%iB, comp:%iB, pos:%i' % (
+                            length, compLength, currentPosition))
 
-                    # An order for slave to start computing its hashes for every chunk. It takes time.
-                    sendCommand(io, CMD_SUBHASH)
-
-                    # Meanwhile, we can calculate our own
-                    localDigestList = [hashlib.new(settings.hashName, getChunk(i)).digest()
-                                       for i in xrange(chunkCount)]
-
-                    # Reading remote hashes, they supposed to be ready by now
+                if settings.action == "PULL":
+                    # Reading compressed data from remote
+                    sendCommand(io, CMD_READ)
+                    io.write(struct.pack("<QQ", currentPosition, length))
                     checkCommand(io)
-                    remoteDigestList = [io.read(settings.digestSize) for i in xrange(chunkCount)]
+                    (compLength,) = struct.unpack('<Q', io.read(8))
+                    compBuffer = io.read(compLength)
 
-                    # Comparing hashes and writing only necessary small chunks
-                    for i in xrange(0, chunkCount):
-                        if localDigestList[i] != remoteDigestList[i]:
-                            # Getting and compressing chunk
+                    # Writing it to local
+                    localFile.seek(currentPosition)
+                    localFile.write(zlib.decompress(compBuffer))
+                    localFile.seek(currentPosition + length)
+
+                    # Debug logging
+                    if settings.debug:
+                        logDebug('Transferred remote->local raw:%iB, comp:%iB, pos:%i' % (
+                            length, compLength, currentPosition))
+
+            # Syncing with chunks
+            else:
+                chunkCount = int(length / settings.chunkSize)
+                if length % settings.chunkSize > 0:
+                    chunkCount += 1
+                getChunk = lambda n: buf[settings.chunkSize * n:min(length, settings.chunkSize * (n + 1))]
+
+                if settings.debug:
+                    logDebug('Splitting buffer at %i with length %i for %i chunks for detailed check' % (
+                        currentPosition, length, chunkCount))
+
+                # An order for slave to start computing its hashes for every chunk. It takes time.
+                sendCommand(io, CMD_SUBHASH)
+
+                # Meanwhile, we can calculate our own
+                localDigestList = [hashlib.new(settings.hashName, getChunk(i)).digest()
+                                   for i in xrange(chunkCount)]
+
+                # Reading remote hashes, they supposed to be ready by now
+                checkCommand(io)
+                remoteDigestList = [io.read(settings.digestSize) for i in xrange(chunkCount)]
+
+                # Comparing hashes and writing only necessary small chunks
+                for i in xrange(0, chunkCount):
+                    if localDigestList[i] != remoteDigestList[i]:
+                        if settings.action == "PUSH":
+                            # Getting compressed chunk local data
                             chunkPosition = currentPosition + settings.chunkSize * i
                             chunk = getChunk(i)
                             compChunk = zlib.compress(chunk, settings.zipLevel)
                             compChunkLength = len(compChunk)
 
                             # Writing chunk to the remote device
-                            if settings.debug:
-                                logDebug('Writing chunk #%i (raw:%iB, comp:%iB) to pos %i' % (
-                                    i, len(chunk), compChunkLength, chunkPosition))
                             sendCommand(io, CMD_WRITE)
                             io.write(struct.pack("<QQ", chunkPosition, compChunkLength))
                             io.write(compChunk)
                             checkCommand(io)
 
-            # Progress indication
-            if settings.showProgress:
-                logProgress('SYNC progress: %.2f%%' % (100.0 * currentPosition / localSize,))
+                            # Debug logging
+                            if settings.debug:
+                                logDebug('Transferred local->remote chunk #%i (raw:%iB, comp:%iB, pos:%i)' % (
+                                    i, len(chunk), compChunkLength, chunkPosition))
 
-    elif settings.mode == 'COPY':
-        if settings.verbose:
-            logVerbose('Starting to PUSH / COPY data with buffer size %iB' % (settings.bufferSize,))
+                        if settings.action == "PULL":
+                            chunkPosition = currentPosition + settings.chunkSize * i
 
-        # Copying data block-by-block with compression
-        localFile.seek(0)
-        while localFile.tell() < localSize:
-            currentPosition = localFile.tell()
-            length = min(settings.bufferSize, localSize - currentPosition)
+                            # Reading chunk from remote
+                            sendCommand(io, CMD_SUBREAD)
+                            io.write(struct.pack("<Q", i))
+                            checkCommand(io)
+                            (compChunkLength,) = struct.unpack('<Q', io.read(8))
+                            compBuffer = io.read(compChunkLength)
+                            chunk = zlib.decompress(compBuffer)
 
-            # Reading local data
+                            # Writing it locally
+                            localFile.seek(chunkPosition)
+                            localFile.write(chunk)
+                            localFile.seek(chunkPosition + len(chunk))
+
+                            # Debug logging
+                            if settings.debug:
+                                logDebug('Transferred remote->local chunk #%i (raw:%iB, comp:%iB, pos:%i)' % (
+                                    i, len(chunk), compChunkLength, chunkPosition))
+
+                # In case of PULL we used to write chunks in "random" positions, so we should return to expected pos
+                localFile.seek(currentPosition + length)
+
+        # Progress indication
+        if settings.showProgress:
+            logProgress('SYNC progress: %.2f%%' % (100.0 * currentPosition / size,))
+
+
+def doCopy(io, settings, localFile, size):
+    # Copying data block-by-block with compression
+    localFile.seek(0)
+    while localFile.tell() < size:
+        currentPosition = localFile.tell()
+        length = min(settings.bufferSize, size - currentPosition)
+
+        # To remote device if PUSH
+        if settings.action == "PUSH":
+            # Reading and compressing local data
             buf = localFile.read(length)
-
-            # Compressing it
             compBuffer = zlib.compress(buf, settings.zipLevel)
             compLength = len(compBuffer)
 
-            # Writing to the remote device
-            if settings.debug:
-                logDebug('Writing data (raw:%iB, comp:%iB) to pos %i' % (length, compLength, currentPosition))
+            # Writing it to remote
             sendCommand(io, CMD_WRITE)
             io.write(struct.pack("<QQ", currentPosition, compLength))
             io.write(compBuffer)
             checkCommand(io)
 
-            # Progress indication
-            if settings.showProgress:
-                logProgress('COPY progress: %.2f%%' % (100.0 * currentPosition / localSize,))
+            # Debug logging
+            if settings.debug:
+                logDebug('Transferred local->remote raw:%iB, comp:%iB, pos:%i' % (length, compLength, currentPosition))
 
-    if settings.mode and settings.verbose:
-        logVerbose('%s finished' % settings.mode)
+        # Or from remote device if PULL
+        if settings.action == "PULL":
+            # Reading compressed remote data
+            sendCommand(io, CMD_READ)
+            io.write(struct.pack("<QQ", currentPosition, length))
+            checkCommand(io)
+            (compLength,) = struct.unpack('<Q', io.read(8))
+            compBuffer = io.read(compLength)
 
+            # Writing it to local
+            localFile.write(zlib.decompress(compBuffer))
 
-# POPs data from remotePath to localPath, using settings and IO wrapper for slave process
-def doPopAction(io, settings, localFile, localSize, remoteSize):
-    if remoteSize > localSize:
-        raise ActionError('Local device size (%i) is smaller than remote (%i)' % (localSize, remoteSize))
+            # Debug logging
+            if settings.debug:
+                logDebug('Transferred remote->local raw:%iB, comp:%iB, pos:%i' % (length, compLength, currentPosition))
 
-    raise ActionError("POP action is not implemented yet")
+        # Progress indication
+        if settings.showProgress:
+            logProgress('COPY progress: %.2f%%' % (100.0 * currentPosition / size,))
 
 
 # Re-checks both sides by computing and comparing hashes for entire device contents
@@ -686,7 +774,7 @@ def doRecheck(io, settings, localFile, size):
     # Getting final local digest
     localDigest = hashFunc.digest()
 
-    # And remote digest, that should be ready (or we shall wait for it)
+    # And remote digest, that should be ready (or we'll wait for it)
     if settings.verbose:
         logVerbose('Waiting for remote side hash calculation...')
     checkCommand(io)
