@@ -1,134 +1,140 @@
 INTRODUCTION:
 
-An idea and some code of this project was borrowed from Bscp project (https://github.com/vog/bscp).
-Thanks to Volker Diels-Grabsch for simple and effective solution. But i need for some more features and parallel computation on both sides. Copyright information is included in the beginning of the script.
+An idea and some code of this project were borrowed from Bscp project (https://github.com/vog/bscp).
+Special thanks to Volker Diels-Grabsch for providing a simple and effective solution.
 
+Thanks to Volker Diels-Grabsch for simple and effective solution. 
+However, this tool was created to support additional features I needed.
+Copyright information is included at the beginning of the script.
 
 DESCRIPTION:
 
-Basyn is an abbreviation for "Block device Advanced SYNchronization tool".
-It copies data from one block device (or file) to another (located in the network - via SSH, or locally).
+Basyn stands for "Block device Advanced SYNchronization tool".
+It copies data from one block device (or file) to another — either over the network via SSH or locally.
 
-First device ("local device") is always local. Second device ("remote device") can be located either at local machine or in the network.
+The first device (referred to as the local device) is always on the local machine.
+The second device (the remote device) can reside either on the same machine or on a remote host.
 
 There are two possible actions:
-1. PUSH, when data is transferred from local device to remote.
-2. PULL, which writes data to local device from remote.
+    PUSH – Transfer data from the local device to the remote device.
+    PULL – Transfer data from the remote device to the local device.
 
 And two possible modes:
-1. COPY. Data is sequentially copied block-by-block. Is is usable for first-time synchronization to reduce read operations and CPU load on receiving side.
-2. SYNC. The script uses hash function (SHA1 by default, others are available) to read both devices, and detect changed blocks without direct data exchange. Then, only changed blocks will be transferred.
+    COPY – Copies data sequentially, block by block. Recommended for initial syncs to reduce read operations and CPU usage on the receiving side.
+    SYNC – Uses a hash function (SHA1 by default; others are available) to compare both devices in parallel. Only modified blocks are transferred.
 
-Compression is used (by default) in both modes to reduce traffic.
-Because of possible device role exchange, they will be also referenced below as "source device" and "receiving device".
-
+Compression is enabled by default in both modes to reduce network traffic.
+To avoid confusion in role-swapping scenarios, devices are also referred below to as the "source device" and "receiving device"
 
 INSTALLATION:
 
-Following software have to be installed:
-  Local machine: Python interpreter and SSH client
-  Remote machine: Python interpreter and SSH server
-Place this script to any folder at the local machine.
-Local and remote users should be assigned with necessary permissions (r, rw) for corresponding devices.
-Certificate authentication is strongly recommended to avoid interactive password prompt during script execution.
-
+Required software:
+    Local machine: Python interpreter and SSH client
+    Remote machine: Python interpreter and SSH server
+Place the script on the local machine in any convenient directory.
+Ensure that both local and remote users have the necessary read/write permissions for the relevant devices.
+It is strongly recommended to use certificate-based SSH authentication to avoid interactive password prompts during execution.
 
 USAGE:
 
 basyn <options>
 Options (* for mandatory, = for value):
- * -l, --local=     - Local device, for example /dev/sda1.
- * -r, --remote=    - Remote device, for example /dev/vgroup1/copy-sda1.
-   -h, --host=      - Remote hostname or IP address for SSH connection (for example 10.0.0.1 or bkp.corp.site).
-                      If omitted, localhost is presumed, and direct process connection is used instead of SSH.
-   -p  --port=      - Remote host SSH port (default is 22).
-   -u  --user=      - Remote user for SSH connection. If omitted, current local user is presumed.
+ * -l, --local=     - Local device (e.g., /dev/sda1)
+ * -r, --remote=    - Remote device (e.g., /dev/vg_disk_backups/copy-sda1)
+   -h, --host=      - Remote SSH hostname or IP address (e.g., 10.0.0.1 or bkp.corp.site).
+                      If omitted, localhost is assumed. No SSH will be used.
+   -p  --port=      - Remote SSH port (default: 22).
+   -u  --user=      - Remote SSH user (default: same as current local user).
    -a  --action=    - One of the actions:
                       PUSH - use local device as source, remote - as destination;
                       PULL  - use remote device as source, local - as destination.
-                      If omitted, no data will be transferred. Only device existence check will be performed.
- * -m  --mode=      - One of synchronization modes (mandatory if any --action selected):
+                      If omitted, no data transfer is performed — only device existence is verified.
+ * -m  --mode=      - One of the synchronization modes (mandatory if any --action selected):
                       SYNC - copy only changed blocks, detected by parallel hash computation and comparison;
-                      COPY - copy whole data (usable for first time).
-       --recheck    - Re-check data after sync (or immediately, if --action and --mode is not specified).
-       --stat       - Display data transfer statistics after completion.
+                      COPY - copy whole data (recommended for the initial run).
+       --recheck    - Re-check data after sync (or immediately, if no --action and --mode is specified).
+       --stat       - Show transfer statistics upon completion.
        --verbose    - Be verbose in stdout about what is script doing (usable for logging).
-       --progress   - Display progress indicator to stderr.
-       --debug      - Display debug info to stderr (may generate significant amount of information when syncing
-                      BIG devices).
-       --hash=      - Hash function name (SHA1 (used by default), SHA224, SHA256, SHA384, SHA512, BLAKE2B,
-                      BLAKE2S, MD5 are supported).
-       --buffer=    - Buffer size in kilobytes (2048, e.g. 2M, by default) for sequential comparison
+       --progress   - Show progress indicator to stderr.
+       --debug      - Display debug info to stderr (may be extensive for large devices).
+       --hash=      - Hash function (SHA1 (by default), SHA224, SHA256, SHA384, SHA512, BLAKE2B,
+                      BLAKE2S, MD5).
+       --buffer=    - Buffer size in KB for sequential comparison (default: 2048 KB, i.e., 2 MB)
        --chunk=     - Chunk size in kilobytes for detailed comparison.
-                      Allows to trade lesser traffic (by transferring only real changed small chunks, instead
-                      of whole --buffer) for CPU time (used for second data hashing bypass)
-                      Same as buffer if omitted (e.g. no detailed comparison)
+                      Allows trading lesser traffic (by transferring only actually changed small chunks, instead
+                      of whole --buffer) for CPU time (used for secondary data hashing bypass)
+                      Not used by default.
        --zlevel=    - ZLIB compression level (0 - no compression, saves CPU, 9 - best compression, saves
-                      bandwidth. Is 9 by default)
+                      bandwidth. Default: 9)
 
 Exit codes:
-  0 - A-OK. Data matches on both devices.
-  1 - Command line parsing error (displayed). It didn't change any data.
-  2 - Copy / sync error (displayed). Data may be already changed on receiving device, but there are no guarantees, that
-      it matches source device.
-
+  0 - A-OK. Data is identical.
+  1 - Command line parsing error (displayed). No data was changed.
+  2 - Copy / sync error (displayed). Data may have partitially  changed on receiving device, no match guarantees.
 
 EXAMPLES:
 
-To silently (no messges) copy local /dev/sda1 to remote /dev/sda1:
+Perform a silent sync of local source device /dev/sda1 to remote destination device /dev/sda1:
   basyn --local=/dev/sda1 --remote=/dev/sda1 --host 10.0.0.1 --action=PUSH --mode=SYNC
 
-Same as above, but with short options:
+Same as above, using short options:
   basyn -l /dev/sda1 -r /dev/sda1 -h 10.0.0.1 -a PUSH -m SYNC
 
-In addition to above:
-  Display some relaxing info about how it doing.
+In addition to the above:
+  Display some relaxing info about how it's doing.
   ... --verbose
 
-  No compression, to reduce CPU load, while bandwidth is not our bottleneck.
+  Disable compression (reduce CPU usage).
   ... --zlevel=0
 
-  Longer buffer (8M). Better IO and analysis speed, less command traffic (and delays), but more data traffic, because whole buffer is transferred even if one byte changed. Usable for connections with high bandwidth, but slow ping, or for big expected changes.
+  Use a larger buffer (8M). Improves I/O and analysis speed, reduces command traffic (and delays), but increases data traffic, since the entire buffer is transferred even if only a single byte has changed. Suitable for connections with high bandwidth but high latency (slow ping), or when large changes are expected.
   ... --buffer=8192
 
-  Detailed comparison: every buffer (2M by default), which differs, will be split to 64KB chunks, every will be compared separately, and only necessary 64-kb chunks will be transferred. Will reduce data traffic, but raise command traffic. Usable for small expected changes, low bandwidth, but fast ping.
+  For detailed comparison: each differing buffer (2M by default) will be split into 64KB chunks; each chunk will be compared separately, and only the necessary 64KB chunks will be transferred. This reduces data traffic but increases command traffic. Suitable for scenarios with small expected changes, low bandwidth, and fast ping.
   ... --chunk=64
 
-  Do full re-check, whether data matches on both devices, or not.
+  Perform a full re-check after sync to verify whether the data matches on both devices.
   ... --recheck
 
-  Display statistics
-  ... --stat
-  with following description:
-    Device size: Size of the source device in bytes
-    Traffic:     Rx - received,
-                 Tx - transferred,
-                 Both - total
-    Ratio:       Relation of total transferred bytes to source device size, in %. Reflects traffic economy compared to by-byte transfer without any compression
+  Display statistics  
+  ... --stat  
+  with the following description:  
+    Device size: Size of the source device in bytes  
+    Traffic:     Rx - received,  
+                 Tx - transferred,  
+                 Both - total  
+    Ratio:       Ratio of total transferred bytes to the source device size, in %.  
+                 Reflects traffic economy compared to a full byte-by-byte transfer without compression.  
 
-    Time:        Total process time in seconds.
-    Bandwidth:   Real:      Relation of transferred bytes to time. Reflects real network connection usage.
-                 Effective: Relation of device size to time.
+    Time:        Total process time in seconds.  
+    Bandwidth:   Real:      Ratio of transferred bytes to time. Reflects actual network throughput.  
+                 Effective: Ratio of synced device size to time.
 
 No data transfer, re-check only:
   basyn --local=/dev/sda1 --remote=/dev/sda1 --host 10.0.0.1 --recheck
 
 NOTES:
 
-1. In any selected way, during synchronization, one-time sequental read of both devices will be performed (at least, one read on one write for COPY mode). For slow HDDs and big volume sizes this can take hours. It also can reduce lifetime of devices, when used on regular basis. If it matters, you have to use DRBD (Distributed Replicated Block Device) instead. It will track changed blocks in realtime, schedule to transfer it and monitor synchronization status. It is really nice solution, but, sometimes, an overkill.
+1. In any selected mode, at least a one-time sequential read of both devices will be performed during SYNC (and one read and one write during COPY). For slow HDDs and large volume sizes, this process can take hours. It may also reduce the lifespan of the devices if used regularly. If this is a concern, consider using DRBD (Distributed Replicated Block Device) instead. It tracks and marks changed blocks in real time and transfers only necessary changes, monitoring sync state.
 
 2. During COPY/SYNC, esp. of big devices, source device can take some changes by other processes. If changed area already passed by script, those changes will not be transferred to receiving device, and its data can be inconsistent.
 If filesystem on source device is mounted for write, EVEN if it was no data direct writes, some metadata yet can be overwritten, depending of used abstraction layer (atime attribute, for example, by almost any filesystem driver). Things can be worse if device is given to virtual machine, that we cannot stop.
 Even usage of --recheck will not help us to confirm "no-error-state" in those cases, because it is just another full read of devices, it takes time, and while the reading is on, the device can receive more changes by other processes.
 
-So, it is strongly recommended, to remount filesystems read-only, or use LVM snapshots during sync time.
+2. During COPY/SYNC, especially for large devices, the source device may be modified by other processes. If changes occur in areas that have already been processed by the script, those changes will not be transferred to the receiving device, leading to potential data inconsistency.  
+If the filesystem on the source device is mounted with write access, even without direct data writes, some metadata may still be altered — depending on the abstraction layer in use (e.g., the atime attribute, which is updated by almost all filesystem drivers). The situation becomes even worse if the device is used by a virtual machine that cannot be stopped.  
+
+Even using `--recheck` won’t guarantee a "no-error state" in such cases, since it performs yet another full read of both devices — which takes time — and the source may be modified once again during this process.
+
+Therefore, it is strongly recommended to remount filesystems as read-only during sync, or to use LVM snapshots as the synchronization source.
 For example:
-  lvcreate --size 10G --snapshot --name sync-mytome /dev/vgroup/mytome
-  basyn --local=/dev/vgroup/sync-mytome --remote=/dev/vcopies/mytome --host=10.0.0.1 --action=PUSH --mode=SYNC
-  lvremove --force /dev/vgroup/sync-mytome
+  lvcreate --size 10G --snapshot --name mytome-2sync /dev/vgroup/mytome
+  basyn --local=/dev/vgroup/mytome-2sync --remote=/dev/vcopies/mytome --host=10.0.0.1 --action=PUSH --mode=SYNC
+  lvremove --force /dev/vgroup/mytome-2sync
 
-Even this - is not a solution to every possible trouble. You have to notice what activity is done at source device, because snapshot can be ALREADY inconsistent without stopping of some process, flushing cache, etc. You have to plan "data freezing" well by yourself.
+But even using a snapshot is not a silver bullet. Depending on which programs are using the source device, it's possible that its state at the moment the snapshot is taken may be internally inconsistent at higher levels (for example, an application has started writing, but hasn't finished writing all the planned data to a file). You may need to flush caches or stop certain processes. You have to carefully plan "data freezing" on your own, taking into account how the device is being used, and this is beyond the scope of this documentation.
 
-3. Because this script works with raw data and doesn't know about its logical organization, you have to apply TRIM manually after sync, if receiving device is SSD and data is filesystem (by fstrim, for example).
+3. The script operates on raw data and is unaware of filesystems. If syncing to an SSD, you have to TRIM manually on the receiving device afterward (using fstrim, for example)
 
-4. You can be able to obtain good balance between --buffer, --chunk, --zlevel, but you will not jump over maximum read speed of source device. So, "Effective traffic" in statistics should strive to read speed limit.
+4. You can experiment with --buffer, --chunk, and --zlevel to balance CPU, traffic, and speed. However, your effective speed won’t exceed the maximum read/write rates of the source and detination devices or the maximum transter rate of network.
+In fact, it may be even lower due to some issues with the script's asynchronous operation on both the local and remote machines.
