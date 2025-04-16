@@ -1,6 +1,6 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
-# Copyright (C) 2017
+# Copyright (C) 2021
 #
 # Stan Orlov <stvor768@gmail.com>
 #
@@ -46,7 +46,7 @@ CMD_WRITE = 14
 #   3) do simple command-related things
 #   4) send 0x00 byte response followed by corresponding data to stdout.
 def slaveMode():
-    cin, cout = sys.stdin, sys.stdout  # For
+    cin, cout = sys.stdin.buffer, sys.stdout.buffer  # For
 
     sendOk = lambda: cout.write(struct.pack('<B', 0))
 
@@ -79,12 +79,13 @@ def slaveMode():
                 (fileNameLength, hashNameLength, bufferSize, chunkSize, compLevel) = struct.unpack('<QQQQB',
                                                                                                    cin.read(8 * 4 + 1))
                 # ...and strings
-                fileName = cin.read(fileNameLength)
-                hashName = cin.read(hashNameLength)
+                fileName = cin.read(fileNameLength).decode('utf-8')
+                hashName = cin.read(hashNameLength).decode('utf-8')
+
 
                 # Checking device file existence
                 if not os.path.exists(fileName):
-                    cout.write('Device %s is not found' % (fileName,))
+                    cout.write(('Device %s is not found' % (fileName,)).encode('utf-8'))
                     exit(0)
 
                 # Opening file and determining device size, available for writing
@@ -112,7 +113,7 @@ def slaveMode():
                     hashFunc.update(lastHashBuffer)
                     bytesLeft -= bytesToRead
 
-                # Sending "OK" and digest
+                # Sending 'OK' and digest
                 sendOk()
                 cout.write(hashFunc.digest())
                 cout.flush()
@@ -216,7 +217,7 @@ class IOCounter:
     def write(self, s):
         self.outStream.write(s)
         self.outTotal += len(s)
-
+        self.outStream.flush()
 
 # Exception class for slave side error
 class SlaveError(Exception):
@@ -247,7 +248,7 @@ class Settings:
         self.stat = False
         self.verbose = False
         self.hashName = 'SHA1'
-        self.digestSize = hashlib.new(self.hashName).digestsize
+        self.digestSize = hashlib.new(self.hashName).digest_size
         self.bufferSize = 2 * 1024 * 1024 * 1
         self.chunkSize = 0
         self.zipLevel = 9
@@ -339,7 +340,7 @@ Options (* for mandatory, = for value):
         except ValueError as e:
             raise SettingsParseError("Argument conversion error: " + str(e))
 
-        self.digestSize = hashlib.new(self.hashName).digestsize
+        self.digestSize = hashlib.new(self.hashName).digest_size
 
         if not self.localPath:
             raise SettingsParseError("Option must be provided: -l/--local")
@@ -369,7 +370,7 @@ def logDebug(desc):
 
 # Writes string to stdout
 def logVerbose(desc):
-    print '%s: %s' % (datetime.datetime.today().strftime("%x %X"), desc)
+    print("%s: %s" % (datetime.datetime.today().strftime("%x %X"), desc))
 
 
 # Writes string to debug console, adds \r to preserve line
@@ -399,7 +400,7 @@ def checkCommand(io):
     if status == 0:
         return
 
-    raise SlaveError(resp + io.read())
+    raise SlaveError((resp + io.read()).decode("utf-8"))
 
 
 # Master mode main function.
@@ -507,11 +508,11 @@ def prepareSlave(settings):
     script = "".join(lines)
 
     if not settings.remoteHost:
-        localCommand = ('python', '-c', script)
+        localCommand = ('python3', '-c', script)
         if settings.verbose:
             logVerbose('Using pipeline connection')
     else:
-        remoteCommand = 'python -c "%s"' % (script,)
+        remoteCommand = 'python3 -c "%s"' % (script,)
         if settings.user:
             host = '%s@%s' % (settings.user, settings.remoteHost)
         else:
@@ -539,10 +540,14 @@ def prepareSlave(settings):
 def initRemoteDevice(io, settings):
     # Sending the part of the settings
     sendCommand(io, CMD_INIT)
-    io.write(struct.pack("<QQQQB", len(settings.remotePath), len(settings.hashName), settings.bufferSize,
+
+    remotePathBuf = settings.remotePath.encode("utf-8")
+    hashNameBuf = settings.hashName.encode("utf-8")
+
+    io.write(struct.pack("<QQQQB", len(remotePathBuf), len(hashNameBuf), settings.bufferSize,
                          settings.chunkSize, settings.zipLevel))
-    io.write(settings.remotePath)
-    io.write(settings.hashName)
+    io.write(remotePathBuf)
+    io.write(hashNameBuf)
 
     # Checking for OK, meaning that device exists, and getting remote device size
     checkCommand(io)
