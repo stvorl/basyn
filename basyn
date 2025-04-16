@@ -129,11 +129,11 @@ def slaveMode():
                 # Getting chunk hashes
                 hashes = [
                     hashlib.new(hashName, lastHashBuffer[chunkSize * i:min(length, chunkSize * (i + 1))]).digest()
-                    for i in xrange(chunkCount)]
+                    for i in range(chunkCount)]
 
                 # Sending them
                 sendOk()
-                for i in xrange(chunkCount):
+                for i in range(chunkCount):
                     cout.write(hashes[i])
                 cout.flush()
 
@@ -655,14 +655,14 @@ def doSync(io, settings, localFile, size):
 
                 # Meanwhile, we can calculate our own
                 localDigestList = [hashlib.new(settings.hashName, getChunk(i)).digest()
-                                   for i in xrange(chunkCount)]
+                                   for i in range(chunkCount)]
 
                 # Reading remote hashes, they supposed to be ready by now
                 checkCommand(io)
-                remoteDigestList = [io.read(settings.digestSize) for i in xrange(chunkCount)]
+                remoteDigestList = [io.read(settings.digestSize) for i in range(chunkCount)]
 
                 # Comparing hashes and writing only necessary small chunks
-                for i in xrange(0, chunkCount):
+                for i in range(0, chunkCount):
                     if localDigestList[i] != remoteDigestList[i]:
                         if settings.action == "PUSH":
                             # Getting compressed chunk local data
