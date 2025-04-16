@@ -16,12 +16,12 @@ The first device (referred to as the local device) is always on the local machin
 The second device (the remote device) can reside either on the same machine or on a remote host.
 
 There are two possible actions:
-    PUSH – Transfer data from the local device to the remote device.
-    PULL – Transfer data from the remote device to the local device.
+    PUSH - Transfer data from the local device to the remote device.
+    PULL - Transfer data from the remote device to the local device.
 
 And two possible modes:
-    COPY – Copies data sequentially, block by block. Recommended for initial syncs to reduce read operations and CPU usage on the receiving side.
-    SYNC – Uses a hash function (SHA1 by default; others are available) to compare both devices in parallel. Only modified blocks are transferred.
+    COPY - Copies data sequentially, block by block. Recommended for initial syncs to reduce read operations and CPU usage on the receiving side.
+    SYNC - Uses a hash function (SHA1 by default; others are available) to compare both devices in parallel. Only modified blocks are transferred.
 
 Compression is enabled by default in both modes to reduce network traffic.
 To avoid confusion in role-swapping scenarios, devices are also referred below to as the "source device" and "receiving device"
@@ -124,7 +124,7 @@ Even usage of --recheck will not help us to confirm "no-error-state" in those ca
 2. During COPY/SYNC, especially for large devices, the source device may be modified by other processes. If changes occur in areas that have already been processed by the script, those changes will not be transferred to the receiving device, leading to potential data inconsistency.  
 If the filesystem on the source device is mounted with write access, even without direct data writes, some metadata may still be altered — depending on the abstraction layer in use (e.g., the atime attribute, which is updated by almost all filesystem drivers). The situation becomes even worse if the device is used by a virtual machine that cannot be stopped.  
 
-Even using `--recheck` won’t guarantee a "no-error state" in such cases, since it performs yet another full read of both devices — which takes time — and the source may be modified once again during this process.
+Even using `--recheck` won't guarantee a "no-error state" in such cases, since it performs yet another full read of both devices — which takes time — and the source may be modified once again during this process.
 
 Therefore, it is strongly recommended to remount filesystems as read-only during sync, or to use LVM snapshots as the synchronization source.
 For example:
@@ -136,5 +136,5 @@ But even using a snapshot is not a silver bullet. Depending on which programs ar
 
 3. The script operates on raw data and is unaware of filesystems. If syncing to an SSD, you have to TRIM manually on the receiving device afterward (using fstrim, for example)
 
-4. You can experiment with --buffer, --chunk, and --zlevel to balance CPU, traffic, and speed. However, your effective speed won’t exceed the maximum read/write rates of the source and detination devices or the maximum transter rate of network.
+4. You can experiment with --buffer, --chunk, and --zlevel to balance CPU, traffic, and speed. However, your effective speed won't exceed the maximum read/write rates of the source and detination devices or the maximum transter rate of network.
 In fact, it may be even lower due to some issues with the script's asynchronous operation on both the local and remote machines.
