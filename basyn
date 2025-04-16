@@ -262,35 +262,39 @@ class Settings:
             """
 basyn <options>
 Options (* for mandatory, = for value):
- * -l, --local=     - Local device, for example /dev/sda1.
- * -r, --remote=    - Remote device, for example /dev/vgroup1/copy-sda1.
-   -h, --host=      - Remote hostname or IP address for SSH connection (for example 10.0.0.1 or bkp.corp.site).
-                      If omitted, localhost is presumed, and direct process connection is used instead of SSH.
-   -p  --port=      - Remote host SSH port (default is 22).
-   -u  --user=      - Remote user for SSH connection. If omitted, current local user is presumed.
+ * -l, --local=     - Local device (e.g., /dev/sda1)
+ * -r, --remote=    - Remote device (e.g., /dev/vg_disk_backups/copy-sda1)
+   -h, --host=      - Remote SSH hostname or IP address (e.g., 10.0.0.1 or bkp.corp.site).
+                      If omitted, localhost is assumed. No SSH will be used.
+   -p  --port=      - Remote SSH port (default: 22).
+   -u  --user=      - Remote SSH user (default: same as current local user).
    -a  --action=    - One of the actions:
                       PUSH - use local device as source, remote - as destination;
                       PULL  - use remote device as source, local - as destination.
-                      If omitted, no data will be transferred. Only device existence check will be performed.
- * -m  --mode=      - One of synchronization modes (mandatory if any --action selected):
+                      If omitted, no data transfer is performed - only device existence is verified.
+ * -m  --mode=      - One of the synchronization modes (mandatory if any --action selected):
                       SYNC - copy only changed blocks, detected by parallel hash computation and comparison;
-                      COPY - copy whole data (usable for first time).
-       --recheck    - Re-check data after sync (or immediately, if --action and --mode is not specified).
-       --stat       - Display data transfer statistics after completion.
+                      COPY - copy whole data (recommended for the initial run).
+       --recheck    - Re-check data after sync (or immediately, if no --action and --mode is specified).
+       --stat       - Show transfer statistics upon completion.
        --verbose    - Be verbose in stdout about what is script doing (usable for logging).
-       --progress   - Display progress indicator to stderr.
-       --debug      - Display debug info to stderr (may generate significant amount of information when syncing
-                      BIG devices).
-       --hash=      - Hash function name (SHA1 (used by default), SHA224, SHA256, SHA384, SHA512, BLAKE2B,
-                      BLAKE2S, MD5 are supported).
-       --buffer=    - Buffer size in kilobytes (2048, e.g. 2M, by default) for sequential comparison
+       --progress   - Show progress indicator to stderr.
+       --debug      - Display debug info to stderr (may be extensive for large devices).
+       --hash=      - Hash function (SHA1 (by default), SHA224, SHA256, SHA384, SHA512, BLAKE2B,
+                      BLAKE2S, MD5).
+       --buffer=    - Buffer size in KB for sequential comparison (default: 2048 KB, i.e., 2 MB)
        --chunk=     - Chunk size in kilobytes for detailed comparison.
-                      Allows to trade lesser traffic (by transferring only real changed small chunks, instead of
-                      whole --buffer) for CPU time (used for second data hashing bypass)
-                      Same as buffer if omitted (e.g. no detailed comparison)
+                      Allows trading lesser traffic (by transferring only actually changed small chunks, instead
+                      of whole --buffer) for CPU time (used for secondary data hashing bypass)
+                      Not used by default.
        --zlevel=    - ZLIB compression level (0 - no compression, saves CPU, 9 - best compression, saves
-                      bandwidth. Is 9 by default)
-       """)
+                      bandwidth. Default: 9)
+
+Exit codes:
+  0 - A-OK. Data is identical.
+  1 - Command line parsing error (displayed). No data was changed.
+  2 - Copy / sync error (displayed). Data may have partitially changed on receiving device, no match guarantees.
+""")
 
     # Parses argument line, sets extracted values to local fields
     def parseArguments(self):
