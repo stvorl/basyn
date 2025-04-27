@@ -2,15 +2,13 @@ INTRODUCTION:
 
 An idea and some code of this project were borrowed from Bscp project (https://github.com/vog/bscp).
 Special thanks to Volker Diels-Grabsch for providing a simple and effective solution.
-
-Thanks to Volker Diels-Grabsch for simple and effective solution. 
 However, this tool was created to support additional features I needed.
 Copyright information is included at the beginning of the script.
 
 DESCRIPTION:
 
 Basyn stands for "Block device Advanced SYNchronization tool".
-It copies data from one block device (or file) to another — either over the network via SSH or locally.
+It copies data from one block device (or file) to another - either over the network via SSH or locally.
 
 The first device (referred to as the local device) is always on the local machine.
 The second device (the remote device) can reside either on the same machine or on a remote host.
@@ -48,7 +46,7 @@ Options (* for mandatory, = for value):
    -a  --action=    - One of the actions:
                       PUSH - use local device as source, remote - as destination;
                       PULL  - use remote device as source, local - as destination.
-                      If omitted, no data transfer is performed — only device existence is verified.
+                      If omitted, no data transfer is performed - only device existence is verified.
  * -m  --mode=      - One of the synchronization modes (mandatory if any --action selected):
                       SYNC - copy only changed blocks, detected by parallel hash computation and comparison;
                       COPY - copy whole data (recommended for the initial run).
@@ -122,9 +120,9 @@ If filesystem on source device is mounted for write, EVEN if it was no data dire
 Even usage of --recheck will not help us to confirm "no-error-state" in those cases, because it is just another full read of devices, it takes time, and while the reading is on, the device can receive more changes by other processes.
 
 2. During COPY/SYNC, especially for large devices, the source device may be modified by other processes. If changes occur in areas that have already been processed by the script, those changes will not be transferred to the receiving device, leading to potential data inconsistency.  
-If the filesystem on the source device is mounted with write access, even without direct data writes, some metadata may still be altered — depending on the abstraction layer in use (e.g., the atime attribute, which is updated by almost all filesystem drivers). The situation becomes even worse if the device is used by a virtual machine that cannot be stopped.  
+If the filesystem on the source device is mounted with write access, even without direct data writes, some metadata may still be altered - depending on the abstraction layer in use (e.g., the atime attribute, which is updated by almost all filesystem drivers). The situation becomes even worse if the device is used by a virtual machine that cannot be stopped.  
 
-Even using `--recheck` won't guarantee a "no-error state" in such cases, since it performs yet another full read of both devices — which takes time — and the source may be modified once again during this process.
+Even using `--recheck` won't guarantee a "no-error state" in such cases, since it performs yet another full read of both devices - which takes time - and the source may be modified once again during this process.
 
 Therefore, it is strongly recommended to remount filesystems as read-only during sync, or to use LVM snapshots as the synchronization source.
 For example:
