@@ -660,14 +660,18 @@ class Syncer:
     def displayStat(self):
         """Displays statistics"""
         usedTime = 0.001 * (getTime() - self.startTime)
-        bytesRx, bytesTx, bytesTotal = (self.remoteIO.inTotal, self.remoteIO.outTotal, self.remoteIO.inTotal +
-                                        self.remoteIO.outTotal)
-        ratio = 100.0 * bytesTotal / self.syncSize if self.syncSize != 0 else 100
-        realBandwidth = 1.0 * bytesTotal / (1024 * usedTime)
-        effectiveBandwidth = 1.0 * self.syncSize / (1024 * usedTime)
-        print('STAT. Device size:%iB. Traffic: Rx:%iB, Tx:%iB, Both:%iB Ratio: %.4f%%. Time: %.2fs. \
+        if self.remoteIO:
+            bytesRx, bytesTx, bytesTotal = (self.remoteIO.inTotal, self.remoteIO.outTotal, self.remoteIO.inTotal +
+                                            self.remoteIO.outTotal)
+            ratio = 100.0 * bytesTotal / self.syncSize if self.syncSize != 0 else 100
+            realBandwidth = 1.0 * bytesTotal / (1024 * usedTime)
+            effectiveBandwidth = 1.0 * self.syncSize / (1024 * usedTime)
+            print('STAT. Device size:%iB. Traffic: Rx:%iB, Tx:%iB, Both:%iB Ratio: %.4f%%. Time: %.2fs. \
         Bandwidth: Real:%.2fkB/s, Effective:%.2fkB/s' % (
-                self.syncSize, bytesRx, bytesTx, bytesTotal, ratio, usedTime, realBandwidth, effectiveBandwidth))
+                    self.syncSize, bytesRx, bytesTx, bytesTotal, ratio, usedTime, realBandwidth, effectiveBandwidth))
+        else:
+            # No remote IO, show only basic stats
+            print('STAT. Device size:%iB. Time: %.2fs.' % (self.syncSize, usedTime))
 
     # Re-checks both sides by computing and comparing hashes for entire device contents
     def doRecheck(self):
