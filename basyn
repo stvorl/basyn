@@ -192,6 +192,18 @@ import datetime
 import getopt
 import subprocess
 
+# Hash function name to ID mapping
+HASH_FUNCTIONS = {
+    "SHA1": 0,
+    "SHA224": 1,
+    "SHA256": 2,
+    "SHA384": 3,
+    "SHA512": 4,
+    "BLAKE2B": 5,
+    "BLAKE2S": 6,
+    "MD5": 7
+}
+
 # Lambda for get system time in millis
 getTime = lambda: int(round(time.time() * 1000))
 
@@ -297,12 +309,11 @@ Options (* for mandatory, = for value):
    -b  --bitmap=    - Bitmap file. Use a bitmap file to compare data from the source device instead of reading the 
                       destination device. If the file does not exist, it will be created.
                       This option significantly alters the behavior of several other parameters:
-                      1. The destination device is never read. Only hashes from the source device are compared to
+                      - The destination device is never read. Only hashes from the source device are compared to
                       those stored in the bitmap file. 
-                      2. When this option is used, you may omit  the destination device (--remote for PUSH, 
-                      and --local for PULL). 
-                      In this case, the bitmap file will simply be updated by source device hashes, 
-                      without writing any data to destination device. See documentation for details.                                     
+                      - When this option is used, you may omit the destination device (--remote for PUSH, 
+                      and --local for PULL). In this case, the bitmap file will simply be updated by source device 
+                      hashes, without writing any data to destination device.                                                           
 Exit codes:
   0 - A-OK. Data is identical.
   1 - Command line parsing error (displayed). No data was changed.
@@ -361,22 +372,26 @@ Exit codes:
 
         self.digestSize = hashlib.new(self.hashName).digest_size
 
-        if not self.localPath:
-            raise SettingsParseError("Option must be provided: -l/--local")
-        if not self.remotePath:
-            raise SettingsParseError("Option must be provided: -r/--remote")
         if self.action not in ("", "PUSH", "PULL"):
             raise SettingsParseError("Unknown action - '%s'" % (self.action,))
         if self.action and self.mode not in ("COPY", "SYNC"):
             raise SettingsParseError("Unknown mode - '%s' for action '%s'" % (self.mode, self.action))
         if not self.action and self.mode:
             raise SettingsParseError("Option -m/--mode can be only used with -a/--action")
+        if not self.localPath and (not self.bitmapPath or self.action == "PUSH"):
+            raise SettingsParseError("Option must be provided: -l/--local")
+        if not self.remotePath and (not self.bitmapPath or self.action == "PULL"):
+            raise SettingsParseError("Option must be provided: -r/--remote")
         if not self.remoteHost and self.user:
             raise SettingsParseError("Option -u/--user can be only used with -h/--host")
         if self.chunkSize > self.bufferSize:
             raise SettingsParseError("--chunk can't be greater than --buffer")
         if self.mode != "SYNC" and self.bitmapPath:
             raise SettingsParseError("--bitmap can be used with --mode==SYNC only")
+        if self.hashName:
+            if self.hashName not in HASH_FUNCTIONS:
+                raise ValueError(f"Unsupported hash function: {self.hashName}")
+            self.digestSize = hashlib.new(self.hashName).digest_size
 
 
 # Displays information about this script
@@ -388,7 +403,7 @@ Synchronizes data from block device / file to another local or network (via SSH)
 
 # Converts byte string to hex string
 def byteToHex(byteStr):
-    return ''.join(["%02x" % ord(x) for x in byteStr]).strip()
+    return ''.join(["%02x" % x for x in byteStr]).strip()
 
 
 # Writes string to debug console (stderr currently)
@@ -500,10 +515,7 @@ class Syncer:
     def __init__(self, settings):
         """Constructor around settings"""
         self.settings = settings
-
         self.startTime = 0
-
-        self.bitmapFile = None
 
         # Preparing slave, if needed
         self.remoteIO = None
@@ -531,18 +543,18 @@ class Syncer:
         elif self.remoteIO:
             self.syncSize = self.remoteSize
 
-        # Initializing bitmap
-        try:
-            self.initBitmap()
-        except Exception as e:
-            raise e
-
+        self.bitmapFile = None
+        self.bitmapSize = 0
 
     def perform(self):
         if self.settings.action != "":
             if self.settings.verbose:
                 logVerbose('Starting to %s / %s data with buffer size %iB' % (self.settings.action, self.settings.mode,
                                                                               self.settings.bufferSize,))
+            self.startTime = getTime()
+
+            if self.settings.bitmapPath:
+                self.initBitmap()
 
             if self.settings.mode == "SYNC":
                 if self.bitmapFile:
@@ -573,7 +585,73 @@ class Syncer:
             self.bitmapFile.close()
 
     def initBitmap(self):
-        pass
+        MAGIC_NUMBER = 239840023593485091
+
+        hash_id = HASH_FUNCTIONS[self.settings.hashName]
+        need_hashes = (self.syncSize + self.settings.bufferSize - 1) // self.settings.bufferSize
+        header_format = "<Q Q Q B"  # 8+8+8+1 = 25 bytes
+
+        try:
+            # Open bitmap file
+            self.bitmapFile = open(self.settings.bitmapPath, "r+b")
+        except FileNotFoundError:
+            # Create file with current settings
+            self.bitmapFile = open(self.settings.bitmapPath, "w+b")
+            hash_block_size = need_hashes * self.settings.digestSize
+
+            header = struct.pack(
+                header_format,
+                MAGIC_NUMBER,
+                self.syncSize,
+                self.settings.bufferSize,
+                hash_id
+            )
+
+            self.bitmapFile.write(header)
+            self.bitmapFile.write(bytes(hash_block_size))
+
+        # At this point bitmap file already exists, correct or not
+        self.bitmapFile.seek(0,2)
+        bitmapSize = self.bitmapFile.tell()
+        self.bitmapFile.seek(0)
+
+        header_size = struct.calcsize(header_format)
+        header_data = self.bitmapFile.read(header_size)
+
+        if len(header_data) < header_size:
+            raise ActionError("Bitmap file is too small to contain header")
+
+        # Unpack header fields
+        magic, file_device_size, file_buffer_size, file_hash_id = struct.unpack(header_format, header_data)
+
+        # Validate magic number
+        if magic != MAGIC_NUMBER:
+            raise ActionError("Invalid bitmap file")
+
+        # Validate device size
+        if file_device_size != self.syncSize:
+            raise ActionError(f"Device size mismatch: expected - {self.syncSize}, got in bitmap - {file_device_size}")
+
+        # Validate buffer size
+        if file_buffer_size != self.settings.bufferSize:
+            raise ValueError(f"Buffer size mismatch: expected {self.settings.bufferSize}, got {file_buffer_size}")
+
+        # Validate hash function
+        if file_hash_id != hash_id:
+            # TODO change to names
+            raise ValueError(f"Hash function mismatch: expected {hash_id}, got {file_hash_id}")
+
+        # Calculate expected hash block size
+        expected_hash_size = self.settings.digestSize
+        expected_num_hashes = (file_device_size + file_buffer_size - 1) // file_buffer_size
+        expected_hash_block_size = expected_num_hashes * expected_hash_size
+
+        # Validate actual file size
+        actual_hash_block_size = bitmapSize - header_size
+        if actual_hash_block_size != expected_hash_block_size:
+            raise ValueError(f"Hash block size mismatch. Bitmap file is damaged")
+
+        return True
 
     def displayStat(self):
         """Displays statistics"""
@@ -627,6 +705,8 @@ class Syncer:
         if self.settings.verbose:
             logVerbose('Local hash %s %s remote hash %s' % (
                 byteToHex(localDigest), 'MATCHES' if match else 'does NOT MATCH', byteToHex(remoteDigest)))
+        elif self.settings.showProgress:
+            print("")
 
         if not match:
             raise ActionError('Local and remote hashes does NOT MATCH after sync')
@@ -651,129 +731,35 @@ class Syncer:
                                                                                             self.localSize))
 
     def doSync(self):
+        getChunk = lambda n: buf[self.settings.chunkSize * n:min(length, self.settings.chunkSize * (n + 1))]
+
         self.localFile.seek(0)
+
         while self.localFile.tell() < self.syncSize:
-            currentPosition = self.localFile.tell()
-            length = min(self.settings.bufferSize, self.syncSize - currentPosition)
-
-            # An order for slave to read remote data and compute hash
-            sendCommand(self.remoteIO, CMD_HASH)
-            self.remoteIO.write(struct.pack("<QQ", currentPosition, length))
-
-            # Reading local data and computing hash
-            buf = self.localFile.read(length)
-            localDigest = hashlib.new(self.settings.hashName, buf).digest()
-
-            # Waiting for slave to respond and getting remote hash
-            checkCommand(self.remoteIO)
-            remoteDigest = self.remoteIO.read(self.settings.digestSize)
-
-            if self.settings.debug:
-                logDebug('Checking pos %d. Local hash is %s, remote is %s' % (currentPosition,
-                                                                              byteToHex(localDigest),
-                                                                              byteToHex(remoteDigest)))
+            match, buf, currentPosition, length = self._syncCheckStep()
 
             # Checking if local and remote hashes match each other, and, if not, transferring the data buffer
-            if remoteDigest != localDigest:
+            if not match:
                 # Straight syncing with big buffer (no chunks)
                 if self.settings.chunkSize == 0:
                     if self.settings.action == "PUSH":
-                        # Compressing buffer
-                        compBuffer = zlib.compress(buf, self.settings.zipLevel)
-                        compLength = len(compBuffer)
-
-                        # Writing it to remote
-                        sendCommand(self.remoteIO, CMD_WRITE)
-                        self.remoteIO.write(struct.pack("<QQ", currentPosition, compLength))
-                        self.remoteIO.write(compBuffer)
-                        checkCommand(self.remoteIO)
-
-                        # Debug logging
-                        if self.settings.debug:
-                            logDebug('Transferred local->remote raw:%iB, comp:%iB, pos:%i' % (
-                                length, compLength, currentPosition))
+                        self._syncPushTransfer(buf, currentPosition, length)
 
                     if self.settings.action == "PULL":
-                        # Reading compressed data from remote
-                        sendCommand(self.remoteIO, CMD_READ)
-                        self.remoteIO.write(struct.pack("<QQ", currentPosition, length))
-                        checkCommand(self.remoteIO)
-                        (compLength,) = struct.unpack('<Q', self.remoteIO.read(8))
-                        compBuffer = self.remoteIO.read(compLength)
-
-                        # Writing it to local
-                        self.localFile.seek(currentPosition)
-                        self.localFile.write(zlib.decompress(compBuffer))
-                        self.localFile.seek(currentPosition + length)
-
-                        # Debug logging
-                        if self.settings.debug:
-                            logDebug('Transferred remote->local raw:%iB, comp:%iB, pos:%i' % (
-                                length, compLength, currentPosition))
+                        self._syncPullTransfer(currentPosition, length)
 
                 # Syncing with chunks
                 else:
-                    chunkCount = int(length / self.settings.chunkSize)
-                    if length % self.settings.chunkSize > 0:
-                        chunkCount += 1
-                    getChunk = lambda n: buf[self.settings.chunkSize * n:min(length, self.settings.chunkSize * (n + 1))]
-
-                    if self.settings.debug:
-                        logDebug('Splitting buffer at %i with length %i for %i chunks for detailed check' % (
-                            currentPosition, length, chunkCount))
-
-                    # An order for slave to start computing its hashes for every chunk. It takes time.
-                    sendCommand(self.remoteIO, CMD_SUBHASH)
-
-                    # Meanwhile, we can calculate our own
-                    localDigestList = [hashlib.new(self.settings.hashName, getChunk(i)).digest()
-                                       for i in range(chunkCount)]
-
-                    # Reading remote hashes, they supposed to be ready by now
-                    checkCommand(self.remoteIO)
-                    remoteDigestList = [self.remoteIO.read(self.settings.digestSize) for i in range(chunkCount)]
-
+                    chunkCount, localDigestList, remoteDigestList = self._syncAnalyzeChunks(currentPosition, length,
+                                                                                            getChunk)
                     # Comparing hashes and writing only necessary small chunks
                     for i in range(0, chunkCount):
                         if localDigestList[i] != remoteDigestList[i]:
                             if self.settings.action == "PUSH":
-                                # Getting compressed chunk local data
-                                chunkPosition = currentPosition + self.settings.chunkSize * i
-                                chunk = getChunk(i)
-                                compChunk = zlib.compress(chunk, self.settings.zipLevel)
-                                compChunkLength = len(compChunk)
-
-                                # Writing chunk to the remote device
-                                sendCommand(self.remoteIO, CMD_WRITE)
-                                self.remoteIO.write(struct.pack("<QQ", chunkPosition, compChunkLength))
-                                self.remoteIO.write(compChunk)
-                                checkCommand(self.remoteIO)
-
-                                # Debug logging
-                                if self.settings.debug:
-                                    logDebug('Transferred local->remote chunk #%i (raw:%iB, comp:%iB, pos:%i)' % (
-                                        i, len(chunk), compChunkLength, chunkPosition))
+                                self.__syncPushTransferChunked(currentPosition, i, getChunk)
 
                             if self.settings.action == "PULL":
-                                chunkPosition = currentPosition + self.settings.chunkSize * i
-
-                                # Reading chunk from remote
-                                sendCommand(self.remoteIO, CMD_SUBREAD)
-                                self.remoteIO.write(struct.pack("<Q", i))
-                                checkCommand(self.remoteIO)
-                                (compChunkLength,) = struct.unpack('<Q', self.remoteIO.read(8))
-                                compBuffer = self.remoteIO.read(compChunkLength)
-                                chunk = zlib.decompress(compBuffer)
-
-                                # Writing it locally
-                                self.localFile.seek(chunkPosition)
-                                self.localFile.write(chunk)
-                                self.localFile.seek(chunkPosition + len(chunk))
-
-                                # Debug logging
-                                if self.settings.debug:
-                                    logDebug('Transferred remote->local chunk #%i (raw:%iB, comp:%iB, pos:%i)' % (
-                                        i, len(chunk), compChunkLength, chunkPosition))
+                                self.__syncPullTransferChunked(currentPosition, i)
 
                     # In case of PULL we used to write chunks in "random" positions, so we should return to expected pos
                     self.localFile.seek(currentPosition + length)
@@ -783,7 +769,7 @@ class Syncer:
                 logProgress('SYNC progress: %.2f%%' % (100.0 * currentPosition / self.syncSize,))
 
     def doBSync(self):
-        raise NotImplemented("Bitmaps are not working yet")
+        raise NotImplementedError("Bitmaps are not working yet")
 
     def doCopy(self):
         # Copying data block-by-block with compression
@@ -794,42 +780,135 @@ class Syncer:
 
             # To remote device if PUSH
             if self.settings.action == "PUSH":
-                # Reading and compressing local data
                 buf = self.localFile.read(length)
-                compBuffer = zlib.compress(buf, self.settings.zipLevel)
-                compLength = len(compBuffer)
-
-                # Writing it to remote
-                sendCommand(self.remoteIO, CMD_WRITE)
-                self.remoteIO.write(struct.pack("<QQ", currentPosition, compLength))
-                self.remoteIO.write(compBuffer)
-                checkCommand(self.remoteIO)
-
-                # Debug logging
-                if self.settings.debug:
-                    logDebug(
-                        'Transferred local->remote raw:%iB, comp:%iB, pos:%i' % (length, compLength, currentPosition))
+                self._syncPushTransfer(buf, currentPosition, length)
 
             # Or from remote device if PULL
             if self.settings.action == "PULL":
-                # Reading compressed remote data
-                sendCommand(self.remoteIO, CMD_READ)
-                self.remoteIO.write(struct.pack("<QQ", currentPosition, length))
-                checkCommand(self.remoteIO)
-                (compLength,) = struct.unpack('<Q', self.remoteIO.read(8))
-                compBuffer = self.remoteIO.read(compLength)
-
-                # Writing it to local
-                self.localFile.write(zlib.decompress(compBuffer))
-
-                # Debug logging
-                if self.settings.debug:
-                    logDebug(
-                        'Transferred remote->local raw:%iB, comp:%iB, pos:%i' % (length, compLength, currentPosition))
+                self._syncPullTransfer(currentPosition, length)
 
             # Progress indication
             if self.settings.showProgress:
                 logProgress('COPY progress: %.2f%%' % (100.0 * currentPosition / self.syncSize,))
+
+    def _syncCheckStep(self):
+        currentPosition = self.localFile.tell()
+        length = min(self.settings.bufferSize, self.syncSize - currentPosition)
+
+        # An order for slave to read remote data and compute hash
+        sendCommand(self.remoteIO, CMD_HASH)
+        self.remoteIO.write(struct.pack("<QQ", currentPosition, length))
+
+        # Reading local data and computing hash
+        buf = self.localFile.read(length)
+        localDigest = hashlib.new(self.settings.hashName, buf).digest()
+
+        # Waiting for slave to respond and getting remote hash
+        checkCommand(self.remoteIO)
+        remoteDigest = self.remoteIO.read(self.settings.digestSize)
+
+        if self.settings.debug:
+            logDebug('Checking pos %d. Local hash is %s, remote is %s' % (currentPosition,
+                                                                          byteToHex(localDigest),
+                                                                          byteToHex(remoteDigest)))
+        return remoteDigest == localDigest, buf, currentPosition, length
+
+    def _syncPushTransfer(self, buf, currentPosition, length):
+        # Compressing buffer
+        compBuffer = zlib.compress(buf, self.settings.zipLevel)
+        compLength = len(compBuffer)
+
+        # Writing it to remote
+        sendCommand(self.remoteIO, CMD_WRITE)
+        self.remoteIO.write(struct.pack("<QQ", currentPosition, compLength))
+        self.remoteIO.write(compBuffer)
+        checkCommand(self.remoteIO)
+
+        # Debug logging
+        if self.settings.debug:
+            logDebug('Transferred local->remote raw:%iB, comp:%iB, pos:%i' % (
+                length, compLength, currentPosition))
+
+    def _syncPullTransfer(self, currentPosition, length):
+        # Reading compressed data from remote
+        sendCommand(self.remoteIO, CMD_READ)
+        self.remoteIO.write(struct.pack("<QQ", currentPosition, length))
+        checkCommand(self.remoteIO)
+        (compLength,) = struct.unpack('<Q', self.remoteIO.read(8))
+        compBuffer = self.remoteIO.read(compLength)
+
+        # Writing it to local
+        self.localFile.seek(currentPosition)
+        self.localFile.write(zlib.decompress(compBuffer))
+        self.localFile.seek(currentPosition + length)
+
+        # Debug logging
+        if self.settings.debug:
+            logDebug('Transferred remote->local raw:%iB, comp:%iB, pos:%i' % (
+                length, compLength, currentPosition))
+
+    def _syncAnalyzeChunks(self, currentPosition, length, getChunkLambda):
+        #getChunk = lambda n: buf[self.settings.chunkSize * n:min(length, self.settings.chunkSize * (n + 1))]
+
+        chunkCount = int(length / self.settings.chunkSize)
+        if length % self.settings.chunkSize > 0:
+            chunkCount += 1
+
+        if self.settings.debug:
+            logDebug('Splitting buffer at %i with length %i for %i chunks for detailed check' % (
+                currentPosition, length, chunkCount))
+
+        # An order for slave to start computing its hashes for every chunk. It takes time.
+        sendCommand(self.remoteIO, CMD_SUBHASH)
+
+        # Meanwhile, we can calculate our own
+        localDigestList = [hashlib.new(self.settings.hashName, getChunkLambda(i)).digest()
+                           for i in range(chunkCount)]
+
+        # Reading remote hashes, they supposed to be ready by now
+        checkCommand(self.remoteIO)
+        remoteDigestList = [self.remoteIO.read(self.settings.digestSize) for i in range(chunkCount)]
+
+        return chunkCount, localDigestList, remoteDigestList
+
+    def __syncPushTransferChunked(self, currentPosition, chunkIndex, getChunkLambda):
+        # Getting compressed chunk local data
+        chunkPosition = currentPosition + self.settings.chunkSize * chunkIndex
+        chunk = getChunkLambda(chunkIndex)
+        compChunk = zlib.compress(chunk, self.settings.zipLevel)
+        compChunkLength = len(compChunk)
+
+        # Writing chunk to the remote device
+        sendCommand(self.remoteIO, CMD_WRITE)
+        self.remoteIO.write(struct.pack("<QQ", chunkPosition, compChunkLength))
+        self.remoteIO.write(compChunk)
+        checkCommand(self.remoteIO)
+
+        # Debug logging
+        if self.settings.debug:
+            logDebug('Transferred local->remote chunk #%i (raw:%iB, comp:%iB, pos:%i)' % (
+                chunkIndex, len(chunk), compChunkLength, chunkPosition))
+
+    def __syncPullTransferChunked(self, currentPosition, chunkIndex):
+        chunkPosition = currentPosition + self.settings.chunkSize * chunkIndex
+
+        # Reading chunk from remote
+        sendCommand(self.remoteIO, CMD_SUBREAD)
+        self.remoteIO.write(struct.pack("<Q", chunkIndex))
+        checkCommand(self.remoteIO)
+        (compChunkLength,) = struct.unpack('<Q', self.remoteIO.read(8))
+        compBuffer = self.remoteIO.read(compChunkLength)
+        chunk = zlib.decompress(compBuffer)
+
+        # Writing it locally
+        self.localFile.seek(chunkPosition)
+        self.localFile.write(chunk)
+        self.localFile.seek(chunkPosition + len(chunk))
+
+        # Debug logging
+        if self.settings.debug:
+            logDebug('Transferred remote->local chunk #%i (raw:%iB, comp:%iB, pos:%i)' % (
+                chunkIndex, len(chunk), compChunkLength, chunkPosition))
 
 
 def masterMode():
