@@ -118,6 +118,14 @@ In addition to the above:
                  Tx - transferred,  
                  Both - total  
     Ratio:       Ratio of total transferred bytes to the source device size, in %.  
+                 Reflects traffic economy compared to a full byte-by-byte transfer without compression.  
+    Time:        Total process time in seconds.  
+    Bandwidth:   Real:      Ratio of transferred bytes to time. Reflects actual network throughput.  
+                 Effective: Ratio of synced device size to time.
+
+No data transfer, re-check only:
+  basyn --local=/dev/sda1 --remote=/dev/sda1 --host 10.0.0.1 --recheck
+
 Using bitmap file to optimize sync (avoids reading destination):
   First sync - creates bitmap:
   basyn -l /dev/sda1 -r /dev/sda1 -h 10.0.0.1 -a PUSH -m SYNC -b /root/sda1.bitmap
@@ -127,15 +135,6 @@ Using bitmap file to optimize sync (avoids reading destination):
 
   Update bitmap only (no destination device writing):
   basyn -l /dev/sda1 -m SYNC -b /root/sda1.bitmap -a PUSH
-
-                 Reflects traffic economy compared to a full byte-by-byte transfer without compression.  
-
-    Time:        Total process time in seconds.  
-    Bandwidth:   Real:      Ratio of transferred bytes to time. Reflects actual network throughput.  
-                 Effective: Ratio of synced device size to time.
-
-No data transfer, re-check only:
-  basyn --local=/dev/sda1 --remote=/dev/sda1 --host 10.0.0.1 --recheck
 
 NOTES:
 
