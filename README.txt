@@ -10,7 +10,7 @@ Copyright information is included at the beginning of the script.
 DESCRIPTION:
 
 Basyn stands for "Block device Advanced SYNchronization tool".
-It copies data from one block device (or file) to another — either over the network via SSH or locally.
+It copies data from one block device (or file) to another ï¿½ either over the network via SSH or locally.
 
 The first device (referred to as the local device) is always on the local machine.
 The second device (the remote device) can reside either on the same machine or on a remote host.
@@ -22,6 +22,11 @@ There are two possible actions:
 And two possible modes:
     COPY - Copies data sequentially, block by block. Recommended for initial syncs to reduce read operations and CPU usage on the receiving side.
     SYNC - Uses a hash function (SHA1 by default; others are available) to compare both devices in parallel. Only modified blocks are transferred.
+
+Additionally, SYNC mode supports bitmap files:
+    When a bitmap file is used, hashes from the source device are compared against those stored in the bitmap file rather than reading the destination device.
+    This eliminates the need to read the destination device entirely, which can significantly reduce I/O operations and time.
+    If the bitmap file doesn't exist, it will be created automatically with the appropriate structure.
 
 Compression is enabled by default in both modes to reduce network traffic.
 To avoid confusion in role-swapping scenarios, devices are also referred below to as the "source device" and "receiving device"
@@ -48,7 +53,7 @@ Options (* for mandatory, = for value):
    -a  --action=    - One of the actions:
                       PUSH - use local device as source, remote - as destination;
                       PULL  - use remote device as source, local - as destination.
-                      If omitted, no data transfer is performed — only device existence is verified.
+                      If omitted, no data transfer is performed ï¿½ only device existence is verified.
  * -m  --mode=      - One of the synchronization modes (mandatory if any --action selected):
                       SYNC - copy only changed blocks, detected by parallel hash computation and comparison;
                       COPY - copy whole data (recommended for the initial run).
@@ -66,6 +71,15 @@ Options (* for mandatory, = for value):
                       Not used by default.
        --zlevel=    - ZLIB compression level (0 - no compression, saves CPU, 9 - best compression, saves
                       bandwidth. Default: 9)
+   -b  --bitmap=    - Bitmap file. Use a bitmap file to compare data from the source device instead of reading the 
+                      destination device. If the file does not exist, it will be created.
+                      This option significantly alters the behavior of several other parameters:
+                      - The destination device is never read. Only hashes from the source device are compared to
+                        those stored in the bitmap file. 
+                      - When this option is used, you may omit the destination device (--remote for PUSH, 
+                        and --local for PULL). In this case, the bitmap file will simply be updated by source device 
+                        hashes, without writing any data to destination device.
+                      - Can only be used with --mode=SYNC.
 
 Exit codes:
   0 - A-OK. Data is identical.
@@ -104,6 +118,16 @@ In addition to the above:
                  Tx - transferred,  
                  Both - total  
     Ratio:       Ratio of total transferred bytes to the source device size, in %.  
+Using bitmap file to optimize sync (avoids reading destination):
+  First sync - creates bitmap:
+  basyn -l /dev/sda1 -r /dev/sda1 -h 10.0.0.1 -a PUSH -m SYNC -b /root/sda1.bitmap
+
+  Subsequent syncs - uses existing bitmap:
+  basyn -l /dev/sda1 -r /dev/sda1 -h 10.0.0.1 -a PUSH -m SYNC -b /root/sda1.bitmap
+
+  Update bitmap only (no destination device writing):
+  basyn -l /dev/sda1 -m SYNC -b /root/sda1.bitmap -a PUSH
+
                  Reflects traffic economy compared to a full byte-by-byte transfer without compression.  
 
     Time:        Total process time in seconds.  
@@ -122,12 +146,21 @@ If filesystem on source device is mounted for write, EVEN if it was no data dire
 Even usage of --recheck will not help us to confirm "no-error-state" in those cases, because it is just another full read of devices, it takes time, and while the reading is on, the device can receive more changes by other processes.
 
 2. During COPY/SYNC, especially for large devices, the source device may be modified by other processes. If changes occur in areas that have already been processed by the script, those changes will not be transferred to the receiving device, leading to potential data inconsistency.  
-If the filesystem on the source device is mounted with write access, even without direct data writes, some metadata may still be altered — depending on the abstraction layer in use (e.g., the atime attribute, which is updated by almost all filesystem drivers). The situation becomes even worse if the device is used by a virtual machine that cannot be stopped.  
+If the filesystem on the source device is mounted with write access, even without direct data writes, some metadata may still be altered ï¿½ depending on the abstraction layer in use (e.g., the atime attribute, which is updated by almost all filesystem drivers). The situation becomes even worse if the device is used by a virtual machine that cannot be stopped.  
 
-Even using `--recheck` won't guarantee a "no-error state" in such cases, since it performs yet another full read of both devices — which takes time — and the source may be modified once again during this process.
+Even using `--recheck` won't guarantee a "no-error state" in such cases, since it performs yet another full read of both devices ï¿½ which takes time ï¿½ and the source may be modified once again during this process.
 
 Therefore, it is strongly recommended to remount filesystems as read-only during sync, or to use LVM snapshots as the synchronization source.
 For example:
+
+5. Bitmap files store hash values for each buffer-sized block of the source device. The bitmap file structure includes:
+   - Header with magic number, device size, buffer size, and hash function ID
+   - Hash values for all blocks
+   Important considerations when using bitmaps:
+   - The bitmap file must match the device size, buffer size (--buffer), and hash function (--hash). If any of these parameters change, you must delete the old bitmap file and create a new one.
+   - Bitmap files reduce I/O operations by eliminating destination device reads, making sync operations faster, especially for slow devices or high-latency network connections.
+   - When using bitmaps, only the source device is read and compared against stored hashes. Changed blocks are written to the destination (if specified).
+   - Bitmap files can be used for tracking changes without a destination device, allowing you to monitor which blocks have changed over time.
   lvcreate --size 10G --snapshot --name mytome-2sync /dev/vgroup/mytome
   basyn --local=/dev/vgroup/mytome-2sync --remote=/dev/vcopies/mytome --host=10.0.0.1 --action=PUSH --mode=SYNC
   lvremove --force /dev/vgroup/mytome-2sync

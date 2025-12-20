@@ -545,6 +545,7 @@ class Syncer:
 
         self.bitmapFile = None
         self.bitmapSize = 0
+        self.bitmapOffset = 0
 
     def perform(self):
         if self.settings.action != "":
@@ -650,6 +651,9 @@ class Syncer:
         actual_hash_block_size = bitmapSize - header_size
         if actual_hash_block_size != expected_hash_block_size:
             raise ValueError(f"Hash block size mismatch. Bitmap file is damaged")
+
+        # Store offset to first hash for later use
+        self.bitmapOffset = header_size
 
         return True
 
@@ -769,7 +773,60 @@ class Syncer:
                 logProgress('SYNC progress: %.2f%%' % (100.0 * currentPosition / self.syncSize,))
 
     def doBSync(self):
-        raise NotImplementedError("Bitmaps are not working yet")
+        """Performs synchronization using bitmap file for comparison."""
+        getChunk = lambda n: buf[self.settings.chunkSize * n:min(length, self.settings.chunkSize * (n + 1))]
+
+        # Reset position
+        if self.localFile:
+            self.localFile.seek(0)
+
+        blockIndex = 0
+        currentPosition = 0
+
+        while currentPosition < self.syncSize:
+            match, buf, currentPosition, length = self._bsyncCheckStep(blockIndex)
+
+            # Checking if source and bitmap hashes match each other, and, if not, transferring the data buffer
+            if not match:
+                # Transfer data if destination device is present
+                if (self.settings.action == "PUSH" and self.settings.remotePath) or \
+                   (self.settings.action == "PULL" and self.settings.localPath):
+
+                    # Straight syncing with big buffer (no chunks)
+                    if self.settings.chunkSize == 0:
+                        if self.settings.action == "PUSH":
+                            self._syncPushTransfer(buf, currentPosition, length)
+
+                        if self.settings.action == "PULL":
+                            self._syncPullTransfer(currentPosition, length)
+
+                    # Syncing with chunks
+                    else:
+                        chunkCount, localDigestList, remoteDigestList = self._syncAnalyzeChunks(currentPosition, length,
+                                                                                                getChunk)
+                        # Comparing hashes and writing only necessary small chunks
+                        for i in range(0, chunkCount):
+                            if localDigestList[i] != remoteDigestList[i]:
+                                if self.settings.action == "PUSH":
+                                    self.__syncPushTransferChunked(currentPosition, i, getChunk)
+
+                                if self.settings.action == "PULL":
+                                    self.__syncPullTransferChunked(currentPosition, i)
+
+                        # In case of PULL we used to write chunks in "random" positions, so we should return to expected pos
+                        if self.settings.action == "PULL" and self.localFile:
+                            self.localFile.seek(currentPosition + length)
+
+            # Move to next block
+            blockIndex += 1
+            currentPosition += length
+
+            # Progress indication
+            if self.settings.showProgress:
+                logProgress('BSYNC progress: %.2f%%' % (100.0 * currentPosition / self.syncSize,))
+
+        # Ensure bitmap is flushed to disk
+        self.bitmapFile.flush()
 
     def doCopy(self):
         # Copying data block-by-block with compression
@@ -812,6 +869,48 @@ class Syncer:
                                                                           byteToHex(localDigest),
                                                                           byteToHex(remoteDigest)))
         return remoteDigest == localDigest, buf, currentPosition, length
+
+    def _bsyncCheckStep(self, blockIndex):
+        """Check step for bitmap sync: compares source hash with bitmap hash."""
+        currentPosition = self.localFile.tell() if self.localFile else blockIndex * self.settings.bufferSize
+        length = min(self.settings.bufferSize, self.syncSize - currentPosition)
+
+        # Calculate hash position in bitmap file
+        bitmapHashPosition = self.bitmapOffset + blockIndex * self.settings.digestSize
+
+        # Read existing hash from bitmap
+        self.bitmapFile.seek(bitmapHashPosition)
+        storedDigest = self.bitmapFile.read(self.settings.digestSize)
+
+        # Get source data and compute its hash
+        if self.settings.action == "PUSH":
+            # Read from local device
+            buf = self.localFile.read(length)
+            sourceDigest = hashlib.new(self.settings.hashName, buf).digest()
+
+        elif self.settings.action == "PULL":
+            # Request hash from remote device
+            sendCommand(self.remoteIO, CMD_HASH)
+            self.remoteIO.write(struct.pack("<QQ", currentPosition, length))
+            checkCommand(self.remoteIO)
+            sourceDigest = self.remoteIO.read(self.settings.digestSize)
+            buf = None  # For PULL, buf will be fetched later if needed
+
+        # Compare source hash with stored hash
+        match = (sourceDigest == storedDigest)
+
+        if self.settings.debug:
+            logDebug('BSync block %d at pos %d: stored hash %s, source hash %s, match=%s' % (
+                blockIndex, currentPosition, byteToHex(storedDigest), 
+                byteToHex(sourceDigest), match))
+
+        # Update bitmap with new hash if they don't match
+        if not match:
+            self.bitmapFile.seek(bitmapHashPosition)
+            self.bitmapFile.write(sourceDigest)
+            self.bitmapFile.flush()
+
+        return match, buf, currentPosition, length
 
     def _syncPushTransfer(self, buf, currentPosition, length):
         # Compressing buffer
