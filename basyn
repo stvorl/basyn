@@ -196,14 +196,14 @@ import subprocess
 
 # Hash function name to ID mapping
 HASH_FUNCTIONS = {
-    "SHA1": 0,
-    "SHA224": 1,
-    "SHA256": 2,
-    "SHA384": 3,
-    "SHA512": 4,
-    "BLAKE2B": 5,
-    "BLAKE2S": 6,
-    "MD5": 7
+    "sha1": 0,
+    "sha224": 1,
+    "sha256": 2,
+    "sha384": 3,
+    "sha512": 4,
+    "blake2b": 5,
+    "blake2s": 6,
+    "md5": 7
 }
 
 # Lambda function to get system time in milliseconds
@@ -282,7 +282,7 @@ class Settings:
         self.recheck = False
         self.stat = False
         self.verbose = False
-        self.hashName = 'SHA1'
+        self.hashName = 'sha1'
         self.digestSize = hashlib.new(self.hashName).digest_size
         self.bufferSize = 2 * 1024 * 1024 * 1
         self.chunkSize = 0
@@ -381,7 +381,7 @@ Exit codes:
                 elif opt == "--verbose":
                     self.verbose = True
                 elif opt == "--hash":
-                    self.hashName = arg
+                    self.hashName = arg.lower()
                 elif opt == "--buffer":
                     self.bufferSize = 1024 * int(arg)
                 elif opt == "--chunk":
