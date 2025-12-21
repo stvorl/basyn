@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Test: PULL SYNC CHUNKED
+# Test: RECHECK only mode (without action)
 
 # Load environment variables
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -9,17 +9,18 @@ source "${SCRIPT_DIR}/../tests-env"
 # Create source file filled with /dev/urandom
 dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=$TEST_FILE_SIZE_MB status=progress
 
-# Create dest file filled with zeros
-dd if=/dev/zero of="$DEST_FILE" bs=1M count=$TEST_FILE_SIZE_MB status=progress
+# Copy to dest file (should be identical)
+cp "$SOURCE_FILE" "$DEST_FILE"
 
-"$BASYN" -l "$DEST_FILE" -r "$SOURCE_FILE" -a PULL -m SYNC --hash="$TEST_HASH_FUNC" --buffer="$TEST_BUFFER_SIZE" --recheck --stat --progress --chunk=64
+"$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" --hash="$TEST_HASH_FUNC" --recheck --stat --progress
+BASYN_EXIT=$?
 echo
 
-if cmp -s "$SOURCE_FILE" "$DEST_FILE"; then
-    print_success "PULL SYNC CHUNKED working"
+if [ $BASYN_EXIT -eq 0 ]; then
+    print_success "RECHECK only working"
     RESULT=0
 else
-    print_error "PULL SYNC CHUNKED failed"
+    print_error "RECHECK only failed"
     RESULT=1
 fi
 

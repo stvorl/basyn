@@ -1,0 +1,55 @@
+#!/bin/bash
+
+# Test: Edge case - size mismatch between devices
+# Verifies that basyn correctly handles device size mismatches
+
+# Load environment variables
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+source "${SCRIPT_DIR}/../tests-env"
+
+BITMAP_FILE="${TMPDIR}/basyn_bitmap_$$"
+RESULT=0
+
+echo "========================================"
+echo "  Testing size mismatch handling"
+echo "========================================"
+echo ""
+
+# Test 1: Size mismatch (PUSH)
+echo "Test 1: Size mismatch between source and destination (PUSH)"
+echo "----------------------------------------"
+dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=4 status=none
+dd if=/dev/zero of="$DEST_FILE" bs=1M count=2 status=none
+
+OUTPUT=$("$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -a PUSH -m SYNC --hash="$TEST_HASH_FUNC" --bitmap="$BITMAP_FILE" 2>&1)
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ] && echo "$OUTPUT" | grep -qi "Cannot PUSH\|Cannot PULL\|device size"; then
+    print_success "Correctly failed with size mismatch (exit code: $EXIT_CODE)"
+else
+    if [ $EXIT_CODE -eq 0 ]; then
+        print_error "basyn should have failed with non-zero exit code"
+    else
+        print_error "Unexpected error message"
+    fi
+    echo "Output: $OUTPUT"
+    RESULT=1
+fi
+rm -f "$SOURCE_FILE" "$DEST_FILE" "$BITMAP_FILE"
+echo ""
+
+# Summary
+echo "========================================"
+if [ $RESULT -eq 0 ]; then
+    echo "  All size mismatch tests passed"
+else
+    echo "  Some size mismatch tests failed"
+fi
+echo "========================================"
+
+# Cleanup temporary files
+if [ "$CLEANUP" = "1" ]; then
+    rm -f "$SOURCE_FILE" "$DEST_FILE" "$BITMAP_FILE"
+fi
+
+exit $RESULT

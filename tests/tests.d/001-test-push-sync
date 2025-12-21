@@ -6,20 +6,20 @@
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 source "${SCRIPT_DIR}/../tests-env"
 
-# Create 32MB source file filled with /dev/urandom
-dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=32 status=progress
+# Create source file filled with /dev/urandom
+dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=$TEST_FILE_SIZE_MB status=progress
 
-# Create 32MB dest file filled with zeros
-dd if=/dev/zero of="$DEST_FILE" bs=1M count=32 status=progress
+# Create dest file filled with zeros
+dd if=/dev/zero of="$DEST_FILE" bs=1M count=$TEST_FILE_SIZE_MB status=progress
 
-"$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -a PUSH -m SYNC --recheck --stat --progress
+"$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -a PUSH -m SYNC --hash="$TEST_HASH_FUNC" --buffer="$TEST_BUFFER_SIZE" --recheck --stat --progress
 echo
 
 if cmp -s "$SOURCE_FILE" "$DEST_FILE"; then
-    echo "==== PUSH SYNC working"
+    print_success "PUSH SYNC working"
     RESULT=0
 else
-    echo "==== PUSH SYNC failed"
+    print_error "PUSH SYNC failed"
     RESULT=1
 fi
 

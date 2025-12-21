@@ -1,0 +1,67 @@
+#!/bin/bash
+
+# Test: Different compression levels (--zlevel)
+# Tests PUSH SYNC with zlevel 0, 5, and 9
+
+# Load environment variables
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+source "${SCRIPT_DIR}/../tests-env"
+
+# Compression levels to test
+TEST_ZLEVELS=(0 5 9)
+
+# Counters
+TOTAL=0
+PASSED=0
+FAILED=0
+
+echo "========================================"
+echo "  Testing different compression levels"
+echo "========================================"
+echo ""
+
+for zlevel in "${TEST_ZLEVELS[@]}"; do
+    echo "========================================"
+    echo "  Testing with --zlevel=${zlevel}"
+    echo "========================================"
+    echo ""
+    
+    TOTAL=$((TOTAL + 1))
+    
+    # Create test files
+    dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=$TEST_FILE_SIZE_MB status=none
+    dd if=/dev/zero of="$DEST_FILE" bs=1M count=$TEST_FILE_SIZE_MB status=none
+    
+    # Run PUSH SYNC with specific zlevel
+    "$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -a PUSH -m SYNC --zlevel=$zlevel --recheck --stat
+    
+    if cmp -s "$SOURCE_FILE" "$DEST_FILE"; then
+        print_success "PUSH SYNC with --zlevel=${zlevel} working"
+        PASSED=$((PASSED + 1))
+        echo ""
+    else
+        print_error "PUSH SYNC with --zlevel=${zlevel} failed"
+        FAILED=$((FAILED + 1))
+        echo ""
+    fi
+    
+    # Cleanup
+    rm -f "$SOURCE_FILE" "$DEST_FILE"
+done
+
+# Summary report
+echo "========================================"
+echo "  Test Results"
+echo "========================================"
+echo "Compression levels tested: ${TEST_ZLEVELS[*]}"
+echo "Total test runs:           $TOTAL"
+echo "Passed:                    $PASSED"
+echo "Failed:                    $FAILED"
+echo "========================================"
+
+# Return error code if there were failures
+if [ $FAILED -gt 0 ]; then
+    exit 1
+else
+    exit 0
+fi

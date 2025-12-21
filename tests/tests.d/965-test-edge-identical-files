@@ -1,0 +1,70 @@
+#!/bin/bash
+
+# Test: Edge case - already identical files
+# Verifies optimal handling when source and dest are already identical
+
+# Load environment variables
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+source "${SCRIPT_DIR}/../tests-env"
+
+FILE_SIZE=$((TEST_FILE_SIZE_MB * 1024 * 1024))
+RESULT=0
+
+echo "========================================"
+echo "  Testing identical files optimization"
+echo "========================================"
+echo ""
+
+# Test 1: Identical files PUSH SYNC
+echo "Test 1: Identical files (PUSH SYNC)"
+echo "----------------------------------------"
+dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count="$TEST_FILE_SIZE_MB" status=none
+cp "$SOURCE_FILE" "$DEST_FILE"
+
+OUTPUT=$("$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -a PUSH -m SYNC --hash="$TEST_HASH_FUNC" --buffer="$TEST_BUFFER_SIZE" 2>&1)
+echo "$OUTPUT" | tail -1
+
+# Check if files are still identical
+if cmp -s "$SOURCE_FILE" "$DEST_FILE"; then
+    print_success "Identical files handled correctly"
+    # Check if traffic was optimized (should be minimal)
+    RX_TRAFFIC=$(echo "$OUTPUT" | grep -oP 'Rx:\K[0-9]+')
+    TX_TRAFFIC=$(echo "$OUTPUT" | grep -oP 'Tx:\K[0-9]+')
+    if [ ! -z "$TX_TRAFFIC" ] && [ "$TX_TRAFFIC" -lt "$FILE_SIZE" ]; then
+        echo "  ✓ Traffic optimized: Tx=${TX_TRAFFIC}B < FileSize=${FILE_SIZE}B"
+    fi
+else
+    print_error "Files no longer identical after sync"
+    RESULT=1
+fi
+rm -f "$SOURCE_FILE" "$DEST_FILE"
+echo ""
+
+# Test 2: Identical files PULL SYNC
+echo "Test 2: Identical files (PULL SYNC)"
+echo "----------------------------------------"
+dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count="$TEST_FILE_SIZE_MB" status=none
+cp "$SOURCE_FILE" "$DEST_FILE"
+
+OUTPUT=$("$BASYN" -l "$DEST_FILE" -r "$SOURCE_FILE" -a PULL -m SYNC --hash="$TEST_HASH_FUNC" --buffer="$TEST_BUFFER_SIZE" 2>&1)
+echo "$OUTPUT" | tail -1
+
+if cmp -s "$SOURCE_FILE" "$DEST_FILE"; then
+    print_success "Identical files handled correctly"
+else
+    print_error "Files no longer identical after sync"
+    RESULT=1
+fi
+rm -f "$SOURCE_FILE" "$DEST_FILE"
+echo ""
+
+# Summary
+echo "========================================"
+if [ $RESULT -eq 0 ]; then
+    echo "  All identical-file tests passed"
+else
+    echo "  Some identical-file tests failed"
+fi
+echo "========================================"
+
+exit $RESULT

@@ -1,0 +1,92 @@
+#!/bin/bash
+
+# Test: Edge case - corrupted bitmap file
+# Verifies proper error handling with invalid or corrupted bitmap files
+
+# Load environment variables
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+source "${SCRIPT_DIR}/../tests-env"
+
+BITMAP_FILE="${TMPDIR}/basyn_bitmap_$$"
+RESULT=0
+
+echo "========================================"
+echo "  Testing corrupted bitmap handling"
+echo "========================================"
+echo ""
+
+# Test 1: Empty bitmap file
+echo "Test 1: Empty bitmap file"
+echo "----------------------------------------"
+dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=2 status=none
+dd if=/dev/zero of="$DEST_FILE" bs=1M count=2 status=none
+touch "$BITMAP_FILE"  # Empty file
+
+OUTPUT=$("$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -a PUSH -m SYNC --bitmap="$BITMAP_FILE" 2>&1)
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ] && echo "$OUTPUT" | grep -qi "error\|bitmap\|invalid\|corrupted"; then
+    print_success "Correctly failed with empty bitmap file"
+else
+    print_error "Failed to handle empty bitmap file properly"
+    echo "Output: $OUTPUT"
+    RESULT=1
+fi
+rm -f "$SOURCE_FILE" "$DEST_FILE" "$BITMAP_FILE"
+echo ""
+
+# Test 2: Bitmap with garbage data
+echo "Test 2: Bitmap with garbage data"
+echo "----------------------------------------"
+dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=2 status=none
+dd if=/dev/zero of="$DEST_FILE" bs=1M count=2 status=none
+dd if=/dev/urandom of="$BITMAP_FILE" bs=1K count=1 status=none  # Random garbage
+
+OUTPUT=$("$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -a PUSH -m SYNC --bitmap="$BITMAP_FILE" 2>&1)
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ] && echo "$OUTPUT" | grep -qi "error\|bitmap\|invalid\|corrupted"; then
+    print_success "Correctly failed with corrupted bitmap file"
+else
+    print_error "Failed to handle corrupted bitmap file properly"
+    echo "Output: $OUTPUT"
+    RESULT=1
+fi
+rm -f "$SOURCE_FILE" "$DEST_FILE" "$BITMAP_FILE"
+echo ""
+
+# Test 3: Bitmap with valid header but wrong size
+echo "Test 3: Bitmap created for different file size"
+echo "----------------------------------------"
+# Create valid bitmap for 4MB file
+dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=4 status=none
+dd if=/dev/zero of="$DEST_FILE" bs=1M count=4 status=none
+"$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -a PUSH -m SYNC --bitmap="$BITMAP_FILE" 2>&1 >/dev/null
+
+# Now try to use it with 2MB file (different size)
+truncate -s 2M "$SOURCE_FILE"
+truncate -s 2M "$DEST_FILE"
+
+OUTPUT=$("$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -a PUSH -m SYNC --bitmap="$BITMAP_FILE" 2>&1)
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ] && echo "$OUTPUT" | grep -qi "error\|size mismatch\|device size"; then
+    print_success "Correctly failed with size mismatch in bitmap"
+else
+    print_error "Failed to handle bitmap size mismatch properly"
+    echo "Output: $OUTPUT"
+    RESULT=1
+fi
+rm -f "$SOURCE_FILE" "$DEST_FILE" "$BITMAP_FILE"
+echo ""
+
+# Summary
+echo "========================================"
+if [ $RESULT -eq 0 ]; then
+    echo "  All bitmap corruption tests passed"
+else
+    echo "  Some bitmap corruption tests failed"
+fi
+echo "========================================"
+
+exit $RESULT

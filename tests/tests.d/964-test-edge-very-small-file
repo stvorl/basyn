@@ -1,0 +1,80 @@
+#!/bin/bash
+
+# Test: Edge case - very small files (smaller than block size)
+# Verifies proper handling of files smaller than typical block sizes
+
+# Load environment variables
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+source "${SCRIPT_DIR}/../tests-env"
+
+RESULT=0
+
+echo "========================================"
+echo "  Testing very small files"
+echo "========================================"
+echo ""
+
+# Test 1: 512 bytes (1 sector)
+echo "Test 1: 512-byte file (PUSH SYNC)"
+echo "----------------------------------------"
+dd if=/dev/urandom of="$SOURCE_FILE" bs=512 count=1 status=none
+dd if=/dev/zero of="$DEST_FILE" bs=512 count=1 status=none
+
+"$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -a PUSH -m SYNC --hash="$TEST_HASH_FUNC" --buffer="$TEST_BUFFER_SIZE" --stat 2>&1
+echo ""
+
+if cmp -s "$SOURCE_FILE" "$DEST_FILE"; then
+    print_success "512-byte PUSH SYNC working"
+else
+    print_error "512-byte PUSH SYNC failed"
+    RESULT=1
+fi
+rm -f "$SOURCE_FILE" "$DEST_FILE"
+echo ""
+
+# Test 2: 1KB file
+echo "Test 2: 1KB file (PULL SYNC)"
+echo "----------------------------------------"
+dd if=/dev/urandom of="$SOURCE_FILE" bs=1K count=1 status=none
+dd if=/dev/zero of="$DEST_FILE" bs=1K count=1 status=none
+
+"$BASYN" -l "$DEST_FILE" -r "$SOURCE_FILE" -a PULL -m SYNC --hash="$TEST_HASH_FUNC" --buffer="$TEST_BUFFER_SIZE" --stat 2>&1
+echo ""
+
+if cmp -s "$SOURCE_FILE" "$DEST_FILE"; then
+    print_success "1KB PULL SYNC working"
+else
+    print_error "1KB PULL SYNC failed"
+    RESULT=1
+fi
+rm -f "$SOURCE_FILE" "$DEST_FILE"
+echo ""
+
+# Test 3: 4KB file (typical page size)
+echo "Test 3: 4KB file (PUSH COPY)"
+echo "----------------------------------------"
+dd if=/dev/urandom of="$SOURCE_FILE" bs=4K count=1 status=none
+dd if=/dev/zero of="$DEST_FILE" bs=4K count=1 status=none
+
+"$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -a PUSH -m COPY --stat 2>&1
+echo ""
+
+if cmp -s "$SOURCE_FILE" "$DEST_FILE"; then
+    print_success "4KB PUSH COPY working"
+else
+    print_error "4KB PUSH COPY failed"
+    RESULT=1
+fi
+rm -f "$SOURCE_FILE" "$DEST_FILE"
+echo ""
+
+# Summary
+echo "========================================"
+if [ $RESULT -eq 0 ]; then
+    echo "  All very-small-file tests passed"
+else
+    echo "  Some very-small-file tests failed"
+fi
+echo "========================================"
+
+exit $RESULT

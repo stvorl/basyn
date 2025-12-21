@@ -1,0 +1,68 @@
+#!/bin/bash
+
+# Test: Edge case - file permissions
+# Verifies proper error handling when files have insufficient permissions
+
+# Load environment variables
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+source "${SCRIPT_DIR}/../tests-env"
+
+RESULT=0
+
+echo "========================================"
+echo "  Testing file permissions handling"
+echo "========================================"
+echo ""
+
+# Test 1: No read permission on local file
+echo "Test 1: No read permission on local file (PUSH)"
+echo "----------------------------------------"
+dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=1 status=none
+dd if=/dev/zero of="$DEST_FILE" bs=1M count=1 status=none
+chmod 000 "$SOURCE_FILE"
+
+OUTPUT=$("$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -a PUSH -m SYNC 2>&1)
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ] && echo "$OUTPUT" | grep -qi "error\|permission\|denied"; then
+    print_success "Correctly failed with unreadable local file"
+else
+    print_error "Failed to handle unreadable local file properly"
+    echo "Output: $OUTPUT"
+    RESULT=1
+fi
+chmod 644 "$SOURCE_FILE"
+rm -f "$SOURCE_FILE" "$DEST_FILE"
+echo ""
+
+# Test 2: No write permission on destination file
+echo "Test 2: No write permission on destination file (PUSH)"
+echo "----------------------------------------"
+dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=1 status=none
+dd if=/dev/zero of="$DEST_FILE" bs=1M count=1 status=none
+chmod 444 "$DEST_FILE"
+
+OUTPUT=$("$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -a PUSH -m SYNC 2>&1)
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ] && echo "$OUTPUT" | grep -qi "error\|permission\|denied\|read-only"; then
+    print_success "Correctly failed with unwritable destination file"
+else
+    print_error "Failed to handle unwritable destination file properly"
+    echo "Output: $OUTPUT"
+    RESULT=1
+fi
+chmod 644 "$DEST_FILE"
+rm -f "$SOURCE_FILE" "$DEST_FILE"
+echo ""
+
+# Summary
+echo "========================================"
+if [ $RESULT -eq 0 ]; then
+    echo "  All permission tests passed"
+else
+    echo "  Some permission tests failed"
+fi
+echo "========================================"
+
+exit $RESULT

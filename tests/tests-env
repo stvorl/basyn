@@ -21,6 +21,11 @@ export DEST_FILE="${TMPDIR}/basyn_dest_$$"
 export TMPDIR  # Export TMPDIR for use in tests
 export BASYN="${SCRIPT_DIR}/../basyn"
 
+# Test configuration
+export TEST_FILE_SIZE_MB="${TEST_FILE_SIZE_MB:-24}"  # Default test file size in MB
+export TEST_HASH_FUNC="${TEST_HASH_FUNC:-SHA1}"       # Default hash function
+export TEST_BUFFER_SIZE="${TEST_BUFFER_SIZE:-2048}"   # Default buffer size in KB
+
 # Temporary files cleanup management
 # 1 - delete files after tests, 0 - keep for debugging
 export CLEANUP="${CLEANUP:-1}"
@@ -30,3 +35,17 @@ if [ ! -f "$BASYN" ]; then
     echo "Error: basyn not found at $BASYN"
     exit 1
 fi
+
+# Color codes for output
+export GREEN='\033[0;32m'
+export RED='\033[0;31m'
+export NC='\033[0m' # No Color
+
+# Functions for colored output with symbols
+print_success() {
+    echo -e "${GREEN}✓ $*${NC}"
+}
+
+print_error() {
+    echo -e "${RED}✗ $*${NC}"
+}

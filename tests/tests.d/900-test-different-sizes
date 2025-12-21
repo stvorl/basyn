@@ -1,0 +1,72 @@
+#!/bin/bash
+
+# Meta-test: Run all tests with different file sizes
+# This test verifies that basyn works correctly with various file sizes
+
+# Load environment variables
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+TESTS_DIR="$SCRIPT_DIR"  # Save before sourcing tests-env
+source "${SCRIPT_DIR}/../tests-env"
+
+# File sizes to test (in MB)
+# Note: default buffer is 2MB
+TEST_SIZES=(1 3 4 10)
+
+# Counters
+TOTAL=0
+PASSED=0
+FAILED=0
+
+echo "========================================"
+echo "  Meta-test: Different file sizes"
+echo "========================================"
+echo ""
+
+for size in "${TEST_SIZES[@]}"; do
+    echo "========================================"
+    echo "  Testing with file size: ${size}MB"
+    echo "========================================"
+    echo ""
+
+    # Run each test (except 9xx tests) with this size
+    for test_script in "${TESTS_DIR}"/*-test-*; do
+        [ -f "$test_script" ] || continue
+        
+        # Skip 9xx tests (meta-tests)
+        test_name=$(basename "$test_script")
+        [[ "$test_name" =~ ^9 ]] && continue
+        
+        TOTAL=$((TOTAL + 1))
+        
+        echo "----------------------------------------"
+        echo "Running: $test_name (${size}MB)"
+        echo "----------------------------------------"
+        
+        # Run test with overridden TEST_FILE_SIZE_MB
+        if TEST_FILE_SIZE_MB=$size bash "$test_script"; then
+            PASSED=$((PASSED + 1))
+            echo ""
+        else
+            FAILED=$((FAILED + 1))
+            echo "ERROR in test: $test_name with ${size}MB"
+            echo ""
+        fi
+    done
+done
+
+# Summary report
+echo "========================================"
+echo "  Meta-test Results"
+echo "========================================"
+echo "File sizes tested: ${TEST_SIZES[*]} MB"
+echo "Total test runs:   $TOTAL"
+echo "Passed:            $PASSED"
+echo "Failed:            $FAILED"
+echo "========================================"
+
+# Return error code if there were failures
+if [ $FAILED -gt 0 ]; then
+    exit 1
+else
+    exit 0
+fi

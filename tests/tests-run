@@ -32,10 +32,11 @@ for test_script in "${SCRIPT_DIR}"/tests.d/*-test-*; do
     
     if bash "$test_script"; then
         PASSED=$((PASSED + 1))
+        print_success "PASSED: $test_name"
         echo ""
     else
         FAILED=$((FAILED + 1))
-        echo "ERROR in test: $test_name"
+        print_error "FAILED: $test_name"
         echo ""
     fi
 done
@@ -45,8 +46,16 @@ echo "========================================"
 echo "  Test Results"
 echo "========================================"
 echo "Total tests:  $TOTAL"
-echo "Passed:       $PASSED"
-echo "Failed:       $FAILED"
+if [ $PASSED -gt 0 ]; then
+    echo -e "${GREEN}Passed:       $PASSED${NC}"
+else
+    echo "Passed:       $PASSED"
+fi
+if [ $FAILED -gt 0 ]; then
+    echo -e "${RED}Failed:       $FAILED${NC}"
+else
+    echo "Failed:       $FAILED"
+fi
 echo "========================================"
 
 # Return error code if there were failures

@@ -1,0 +1,76 @@
+#!/bin/bash
+
+# Test: Edge case - nonexistent files
+# Verifies proper error handling when source or destination files don't exist
+
+# Load environment variables
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+source "${SCRIPT_DIR}/../tests-env"
+
+NONEXIST_FILE="/tmp/basyn_nonexistent_$$"
+RESULT=0
+
+echo "========================================"
+echo "  Testing nonexistent files handling"
+echo "========================================"
+echo ""
+
+# Test 1: Nonexistent local file
+echo "Test 1: Nonexistent local file (PUSH)"
+echo "----------------------------------------"
+dd if=/dev/urandom of="$DEST_FILE" bs=1M count=1 status=none
+OUTPUT=$("$BASYN" -l "$NONEXIST_FILE" -r "$DEST_FILE" -a PUSH -m SYNC 2>&1)
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ] && echo "$OUTPUT" | grep -qi "error\|not found\|no such file"; then
+    print_success "Correctly failed with nonexistent local file"
+else
+    print_error "Failed to handle nonexistent local file properly"
+    echo "Output: $OUTPUT"
+    RESULT=1
+fi
+rm -f "$DEST_FILE"
+echo ""
+
+# Test 2: Nonexistent remote file
+echo "Test 2: Nonexistent remote file (PULL)"
+echo "----------------------------------------"
+dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=1 status=none
+OUTPUT=$("$BASYN" -l "$SOURCE_FILE" -r "$NONEXIST_FILE" -a PULL -m SYNC 2>&1)
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ] && echo "$OUTPUT" | grep -qi "error\|not found\|no such file"; then
+    print_success "Correctly failed with nonexistent remote file"
+else
+    print_error "Failed to handle nonexistent remote file properly"
+    echo "Output: $OUTPUT"
+    RESULT=1
+fi
+rm -f "$SOURCE_FILE"
+echo ""
+
+# Test 3: Both files nonexistent
+echo "Test 3: Both files nonexistent"
+echo "----------------------------------------"
+OUTPUT=$("$BASYN" -l "$NONEXIST_FILE" -r "${NONEXIST_FILE}_2" -a PUSH -m SYNC 2>&1)
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ] && echo "$OUTPUT" | grep -qi "error\|not found\|no such file"; then
+    print_success "Correctly failed with both files nonexistent"
+else
+    print_error "Failed to handle both files nonexistent properly"
+    echo "Output: $OUTPUT"
+    RESULT=1
+fi
+echo ""
+
+# Summary
+echo "========================================"
+if [ $RESULT -eq 0 ]; then
+    echo "  All edge case tests passed"
+else
+    echo "  Some edge case tests failed"
+fi
+echo "========================================"
+
+exit $RESULT

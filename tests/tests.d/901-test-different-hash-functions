@@ -1,0 +1,71 @@
+#!/bin/bash
+
+# Meta-test: Run all tests with different hash functions
+# This test verifies that basyn works correctly with various hash algorithms
+
+# Load environment variables
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+TESTS_DIR="$SCRIPT_DIR"  # Save before sourcing tests-env
+source "${SCRIPT_DIR}/../tests-env"
+
+# Hash functions to test (from basyn documentation)
+TEST_HASHES=(SHA1 SHA256 SHA512 MD5 BLAKE2B BLAKE2S)
+
+# Counters
+TOTAL=0
+PASSED=0
+FAILED=0
+
+echo "========================================"
+echo "  Meta-test: Different hash functions"
+echo "========================================"
+echo ""
+
+for hash in "${TEST_HASHES[@]}"; do
+    echo "========================================"
+    echo "  Testing with hash: ${hash}"
+    echo "========================================"
+    echo ""
+    
+    # Run each test (except 9xx tests) with this hash
+    for test_script in "${TESTS_DIR}"/*-test-*; do
+        [ -f "$test_script" ] || continue
+        
+        # Skip 9xx tests (meta-tests)
+        test_name=$(basename "$test_script")
+        [[ "$test_name" =~ ^9 ]] && continue
+        
+        TOTAL=$((TOTAL + 1))
+        
+        echo "----------------------------------------"
+        echo "Running: $test_name (${hash})"
+        echo "----------------------------------------"
+        
+        # Run test with overridden TEST_HASH_FUNC
+        if TEST_HASH_FUNC=$hash bash "$test_script"; then
+            PASSED=$((PASSED + 1))
+            echo ""
+        else
+            FAILED=$((FAILED + 1))
+            echo "ERROR in test: $test_name with ${hash}"
+            echo ""
+        fi
+    done
+done
+
+# Summary report
+echo "========================================"
+echo "  Meta-test Results"
+echo "========================================"
+echo "Hash functions tested: ${TEST_HASHES[*]}"
+echo "Total test runs:       $TOTAL"
+echo "Passed:                $PASSED"
+echo "Failed:                $FAILED"
+echo "========================================"
+
+# Return error code if there were failures
+if [ $FAILED -gt 0 ]; then
+    exit 1
+else
+    exit 0
+fi

@@ -1,0 +1,83 @@
+#!/bin/bash
+
+# Test: Edge case - zero-size files
+# Verifies proper handling of zero-sized files
+
+# Load environment variables
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+source "${SCRIPT_DIR}/../tests-env"
+
+RESULT=0
+
+echo "========================================"
+echo "  Testing zero-size files"
+echo "========================================"
+echo ""
+
+# Test 1: Zero-size local file PUSH
+echo "Test 1: Zero-size local file (PUSH)"
+echo "----------------------------------------"
+touch "$SOURCE_FILE"
+dd if=/dev/zero of="$DEST_FILE" bs=1M count=1 status=none
+
+OUTPUT=$("$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -a PUSH -m SYNC 2>&1)
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ] && echo "$OUTPUT" | grep -qi "error\|zero\|invalid\|nothing to sync"; then
+    print_success "Correctly failed with zero-size source file"
+else
+    print_error "Failed to handle zero-size source file properly"
+    echo "Output: $OUTPUT"
+    RESULT=1
+fi
+rm -f "$SOURCE_FILE" "$DEST_FILE"
+echo ""
+
+# Test 2: Zero-size remote file PULL
+echo "Test 2: Zero-size remote file (PULL)"
+echo "----------------------------------------"
+dd if=/dev/zero of="$SOURCE_FILE" bs=1M count=1 status=none
+touch "$DEST_FILE"
+
+OUTPUT=$("$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -a PULL -m SYNC 2>&1)
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ] && echo "$OUTPUT" | grep -qi "error\|zero\|invalid\|nothing to sync"; then
+    print_success "Correctly failed with zero-size remote file"
+else
+    print_error "Failed to handle zero-size remote file properly"
+    echo "Output: $OUTPUT"
+    RESULT=1
+fi
+rm -f "$SOURCE_FILE" "$DEST_FILE"
+echo ""
+
+# Test 3: Both files zero-size
+echo "Test 3: Both files zero-size"
+echo "----------------------------------------"
+touch "$SOURCE_FILE"
+touch "$DEST_FILE"
+
+OUTPUT=$("$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -a PUSH -m SYNC 2>&1)
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ] && echo "$OUTPUT" | grep -qi "error\|zero\|invalid\|nothing to sync"; then
+    print_success "Correctly failed with both files zero-size"
+else
+    print_error "Failed to handle both files zero-size properly"
+    echo "Output: $OUTPUT"
+    RESULT=1
+fi
+rm -f "$SOURCE_FILE" "$DEST_FILE"
+echo ""
+
+# Summary
+echo "========================================"
+if [ $RESULT -eq 0 ]; then
+    echo "  All zero-size tests passed"
+else
+    echo "  Some zero-size tests failed"
+fi
+echo "========================================"
+
+exit $RESULT

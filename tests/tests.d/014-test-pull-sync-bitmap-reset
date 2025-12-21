@@ -13,21 +13,21 @@ BITMAP_FILE="${TMPDIR}/basyn_bitmap_$$"
 echo "==== Test PULL SYNC with BITMAP RESET ===="
 echo
 
-# Step 1: Create 32MB remote (source) file filled with /dev/urandom
+# Step 1: Create remote (source) file filled with /dev/urandom
 echo "Step 1: Creating remote source file..."
-dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=32 status=none
+dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=$TEST_FILE_SIZE_MB status=none
 
-# Create 32MB local (dest) file filled with zeros
+# Create local (dest) file filled with zeros
 echo "Step 2: Creating local destination file..."
-dd if=/dev/zero of="$DEST_FILE" bs=1M count=32 status=none
+dd if=/dev/zero of="$DEST_FILE" bs=1M count=$TEST_FILE_SIZE_MB status=none
 
 # Step 3: Initial sync with bitmap (PULL from SOURCE to DEST)
 echo "Step 3: Initial PULL sync with bitmap creation..."
-"$BASYN" -l "$DEST_FILE" -r "$SOURCE_FILE" -a PULL -m SYNC --bitmap="$BITMAP_FILE" --stat --progress
+"$BASYN" -l "$DEST_FILE" -r "$SOURCE_FILE" -a PULL -m SYNC --hash="$TEST_HASH_FUNC" --buffer="$TEST_BUFFER_SIZE" --bitmap="$BITMAP_FILE" --stat --progress
 echo
 
 if ! cmp -s "$SOURCE_FILE" "$DEST_FILE"; then
-    echo "==== PULL SYNC BITMAP RESET failed - initial sync did not match"
+    print_error "PULL SYNC BITMAP RESET failed - initial sync did not match"
     [ "$CLEANUP" = "1" ] && rm -f "$SOURCE_FILE" "$DEST_FILE" "$BITMAP_FILE"
     exit 1
 fi
@@ -36,17 +36,22 @@ echo
 
 # Step 4: Modify destination (local) file (corrupt it)
 echo "Step 4: Modifying destination file to simulate desync..."
-dd if=/dev/urandom of="$DEST_FILE" bs=1M count=4 seek=8 conv=notrunc status=none
-echo "Destination modified at offset 8MB (4MB changed)"
+# Modify 25% of file starting from 50% offset
+MODIFY_SIZE=$(( TEST_FILE_SIZE_MB / 4 ))
+# Ensure at least 1MB modification
+[ $MODIFY_SIZE -lt 1 ] && MODIFY_SIZE=1
+SEEK_POS=$(( TEST_FILE_SIZE_MB / 2 ))
+dd if=/dev/urandom of="$DEST_FILE" bs=1M count=$MODIFY_SIZE seek=$SEEK_POS conv=notrunc status=none
+echo "Destination modified at offset ${SEEK_POS}MB (${MODIFY_SIZE}MB changed)"
 echo
 
 # Step 5: Sync again with bitmap (should NOT fix, because bitmap is out of sync with dest)
 echo "Step 5: PULL syncing with existing bitmap (should not detect dest changes)..."
-"$BASYN" -l "$DEST_FILE" -r "$SOURCE_FILE" -a PULL -m SYNC --bitmap="$BITMAP_FILE" --stat --progress
+"$BASYN" -l "$DEST_FILE" -r "$SOURCE_FILE" -a PULL -m SYNC --hash="$TEST_HASH_FUNC" --buffer="$TEST_BUFFER_SIZE" --bitmap="$BITMAP_FILE" --stat --progress
 echo
 
 if cmp -s "$SOURCE_FILE" "$DEST_FILE"; then
-    echo "==== PULL SYNC BITMAP RESET failed - files should still be different"
+    print_error "PULL SYNC BITMAP RESET failed - files should still be different"
     [ "$CLEANUP" = "1" ] && rm -f "$SOURCE_FILE" "$DEST_FILE" "$BITMAP_FILE"
     exit 1
 fi
@@ -55,14 +60,14 @@ echo
 
 # Step 6: Sync with --reset-bitmap (should fix everything)
 echo "Step 6: PULL syncing with --reset-bitmap (should rebuild and sync properly)..."
-"$BASYN" -l "$DEST_FILE" -r "$SOURCE_FILE" -a PULL -m SYNC --bitmap="$BITMAP_FILE" --reset-bitmap --stat --progress
+"$BASYN" -l "$DEST_FILE" -r "$SOURCE_FILE" -a PULL -m SYNC --hash="$TEST_HASH_FUNC" --buffer="$TEST_BUFFER_SIZE" --bitmap="$BITMAP_FILE" --reset-bitmap --stat --progress
 echo
 
 if cmp -s "$SOURCE_FILE" "$DEST_FILE"; then
-    echo "==== PULL SYNC BITMAP RESET working - files match after reset"
+    print_success "PULL SYNC BITMAP RESET working - files match after reset"
     RESULT=0
 else
-    echo "==== PULL SYNC BITMAP RESET failed - files do not match after reset"
+    print_error "PULL SYNC BITMAP RESET failed - files do not match after reset"
     RESULT=1
 fi
 

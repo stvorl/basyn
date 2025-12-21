@@ -8,31 +8,34 @@ source "${SCRIPT_DIR}/../tests-env"
 
 BITMAP_FILE="${TMPDIR}/basyn_bitmap_$$"
 
-# Create 32MB source file filled with /dev/urandom
-dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=32 status=progress
+# Create source file filled with /dev/urandom
+dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=$TEST_FILE_SIZE_MB status=progress
 
-# Create 32MB dest file filled with zeros
-dd if=/dev/zero of="$DEST_FILE" bs=1M count=32 status=progress
+# Create dest file filled with zeros
+dd if=/dev/zero of="$DEST_FILE" bs=1M count=$TEST_FILE_SIZE_MB status=progress
 
 # First run - create bitmap and sync
-"$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -a PUSH -m SYNC --bitmap="$BITMAP_FILE" --stat --progress
+"$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -a PUSH -m SYNC --hash="$TEST_HASH_FUNC" --buffer="$TEST_BUFFER_SIZE" --bitmap="$BITMAP_FILE" --stat --progress
 echo "First sync completed (bitmap created)"
 
 # Save copy of original source for verification
 cp "$SOURCE_FILE" "${SOURCE_FILE}.original"
 
 # Modify part of SOURCE file (simulate incremental change)
-dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=8 seek=16 conv=notrunc status=none
+# Modify 25% of file starting from 50% offset
+MODIFY_SIZE=$(( TEST_FILE_SIZE_MB / 4 ))
+SEEK_POS=$(( TEST_FILE_SIZE_MB / 2 ))
+dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=$MODIFY_SIZE seek=$SEEK_POS conv=notrunc status=none
 
 # Second run - bitmap will detect changes in source and transfer only them
-"$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -a PUSH -m SYNC --bitmap="$BITMAP_FILE" --recheck --stat --progress
+"$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -a PUSH -m SYNC --hash="$TEST_HASH_FUNC" --buffer="$TEST_BUFFER_SIZE" --bitmap="$BITMAP_FILE" --recheck --stat --progress
 echo
 
 if cmp -s "$SOURCE_FILE" "$DEST_FILE"; then
-    echo "==== PUSH SYNC BITMAP (reuse) working"
+    print_success "PUSH SYNC BITMAP (reuse) working"
     RESULT=0
 else
-    echo "==== PUSH SYNC BITMAP (reuse) failed"
+    print_error "PUSH SYNC BITMAP (reuse) failed"
     RESULT=1
 fi
 
