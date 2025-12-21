@@ -791,8 +791,13 @@ class Syncer:
             bytesRx, bytesTx, bytesTotal = (self.remoteIO.inTotal, self.remoteIO.outTotal, self.remoteIO.inTotal +
                                             self.remoteIO.outTotal)
             ratio = 100.0 * bytesTotal / self.syncSize if self.syncSize != 0 else 100
-            realBandwidth = 1.0 * bytesTotal / (1024 * usedTime)
-            effectiveBandwidth = 1.0 * self.syncSize / (1024 * usedTime)
+            realBandwidth = 0.0
+            effectiveBandwidth = 0.0
+            
+            if usedTime > 0:
+                realBandwidth = 1.0 * bytesTotal / (1024 * usedTime)
+                effectiveBandwidth = 1.0 * self.syncSize / (1024 * usedTime)
+
             print('STAT. Device size:%iB. Traffic: Rx:%iB, Tx:%iB, Both:%iB Ratio: %.4f%%. Time: %.2fs. \
         Bandwidth: Real:%.2fkB/s, Effective:%.2fkB/s' % (
                     self.syncSize, bytesRx, bytesTx, bytesTotal, ratio, usedTime, realBandwidth, effectiveBandwidth))
