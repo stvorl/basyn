@@ -685,11 +685,11 @@ class Syncer:
     def __del__(self):
         """Clean up resources: close local file and bitmap file."""
         # Closing local file
-        if self.localFile:
+        if hasattr(self, 'localFile') and self.localFile:
             self.localFile.close()
 
         # Closing bitmap
-        if self.bitmapFile:
+        if hasattr(self, 'bitmapFile') and self.bitmapFile:
             self.bitmapFile.close()
 
     def initBitmap(self):
@@ -1253,6 +1253,7 @@ def masterMode():
 
     except ActionError as e:
         print(str(e))
+        exit(2)
 
     except SlaveError as e:
         print("Error at remote side: " + str(e))
