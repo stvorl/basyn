@@ -514,7 +514,9 @@ def prepareSlave(settings):
         if settings.verbose:
             logVerbose('Using pipeline connection')
     else:
-        remoteCommand = 'python3 -c "%s"' % (script,)
+        # Escape double quotes and backslashes in the script for SSH command
+        escapedScript = script.replace('\\', '\\\\').replace('"', '\\"')
+        remoteCommand = 'python3 -c "%s"' % (escapedScript,)
         if settings.user:
             host = '%s@%s' % (settings.user, settings.remoteHost)
         else:
@@ -737,7 +739,6 @@ class Syncer:
             self.bitmapFile.truncate()
             self.bitmapFile.write(header)
             self.bitmapFile.write(bytes(hash_block_size))
-
         # At this point bitmap file already exists, correct or not
         self.bitmapFile.seek(0,2)
         bitmapSize = self.bitmapFile.tell()

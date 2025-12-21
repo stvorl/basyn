@@ -1,0 +1,38 @@
+#!/bin/bash
+
+# Test: SSH connection via loopback (localhost)
+
+# Load environment variables
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+source "${SCRIPT_DIR}/../tests-env"
+
+# Get current user dynamically
+CURRENT_USER=$(whoami)
+
+echo "Testing SSH loopback connection as ${CURRENT_USER}@localhost"
+echo
+
+# Create source file filled with /dev/urandom
+dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=$TEST_FILE_SIZE_MB status=progress
+
+# Create dest file filled with zeros
+dd if=/dev/zero of="$DEST_FILE" bs=1M count=$TEST_FILE_SIZE_MB status=progress
+
+# Test PUSH SYNC over SSH to localhost
+"$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -h localhost -u "$CURRENT_USER" -a PUSH -m SYNC --hash="$TEST_HASH_FUNC" --buffer="$TEST_BUFFER_SIZE" --recheck --stat --progress
+echo
+
+if cmp -s "$SOURCE_FILE" "$DEST_FILE"; then
+    print_success "SSH loopback PUSH SYNC working"
+    RESULT=0
+else
+    print_error "SSH loopback PUSH SYNC failed"
+    RESULT=1
+fi
+
+# Cleanup temporary files
+if [ "$CLEANUP" = "1" ]; then
+    rm -f "$SOURCE_FILE" "$DEST_FILE"
+fi
+
+exit $RESULT
