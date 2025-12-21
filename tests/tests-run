@@ -1,0 +1,57 @@
+#!/bin/bash
+
+# Main script to run all basyn tests
+
+# Get script directory
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Load environment variables
+source "${SCRIPT_DIR}/tests-env"
+
+# Counters
+TOTAL=0
+PASSED=0
+FAILED=0
+
+echo "========================================"
+echo "  Running basyn tests"
+echo "========================================"
+echo ""
+
+# Run each test from tests.d
+for test_script in "${SCRIPT_DIR}"/tests.d/*-test-*; do
+    # Skip if file not found (empty directory)
+    [ -f "$test_script" ] || continue
+    
+    TOTAL=$((TOTAL + 1))
+    test_name=$(basename "$test_script")
+    
+    echo "----------------------------------------"
+    echo "Running: $test_name"
+    echo "----------------------------------------"
+    
+    if bash "$test_script"; then
+        PASSED=$((PASSED + 1))
+        echo ""
+    else
+        FAILED=$((FAILED + 1))
+        echo "ERROR in test: $test_name"
+        echo ""
+    fi
+done
+
+# Summary report
+echo "========================================"
+echo "  Test Results"
+echo "========================================"
+echo "Total tests:  $TOTAL"
+echo "Passed:       $PASSED"
+echo "Failed:       $FAILED"
+echo "========================================"
+
+# Return error code if there were failures
+if [ $FAILED -gt 0 ]; then
+    exit 1
+else
+    exit 0
+fi

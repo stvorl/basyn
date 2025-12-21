@@ -1,0 +1,31 @@
+#!/bin/bash
+
+# Test: PUSH COPY
+
+# Load environment variables
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+source "${SCRIPT_DIR}/../tests-env"
+
+# Create 32MB source file filled with /dev/urandom
+dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=32 status=progress
+
+# Create 32MB dest file filled with zeros
+dd if=/dev/zero of="$DEST_FILE" bs=1M count=32 status=progress
+
+"$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -a PUSH -m COPY --recheck --stat --progress
+echo
+
+if cmp -s "$SOURCE_FILE" "$DEST_FILE"; then
+    echo "==== PUSH COPY working"
+    RESULT=0
+else
+    echo "==== PUSH COPY failed"
+    RESULT=1
+fi
+
+# Cleanup temporary files
+if [ "$CLEANUP" = "1" ]; then
+    rm -f "$SOURCE_FILE" "$DEST_FILE"
+fi
+
+exit $RESULT

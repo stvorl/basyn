@@ -1,0 +1,32 @@
+#!/bin/bash
+
+# Environment variables for basyn tests
+# This file should be sourced in each test script
+
+# Get script directory
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Determine tmpdir (prefer ramdisk)
+if [ -d "/dev/shm" ]; then
+    TMPDIR="/dev/shm"
+elif [ -d "/tmp" ]; then
+    TMPDIR="/tmp"
+else
+    TMPDIR="${SCRIPT_DIR}"
+fi
+
+# Declare environment variables
+export SOURCE_FILE="${TMPDIR}/basyn_source_$$"
+export DEST_FILE="${TMPDIR}/basyn_dest_$$"
+export TMPDIR  # Export TMPDIR for use in tests
+export BASYN="${SCRIPT_DIR}/../basyn"
+
+# Temporary files cleanup management
+# 1 - delete files after tests, 0 - keep for debugging
+export CLEANUP="${CLEANUP:-1}"
+
+# Check basyn existence
+if [ ! -f "$BASYN" ]; then
+    echo "Error: basyn not found at $BASYN"
+    exit 1
+fi
