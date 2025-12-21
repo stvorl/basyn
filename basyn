@@ -39,14 +39,16 @@ CMD_WRITE = 14
 # and started there in Python interpreter via SSH to serve master PC's requests.
 # In case of "local" connection, pipeline with separate Python instance will be used.
 
-# Slave mode handler.
-# This simple function looped to:
-#   1) listen to stdin, waiting for 1-byte command;
-#   2) read command-related data;
-#   3) do simple command-related things
-#   4) send 0x00 byte response followed by corresponding data to stdout.
 def slaveMode():
-    cin, cout = sys.stdin.buffer, sys.stdout.buffer  # For
+    """Slave mode handler.
+    
+    This simple function loops to:
+      1) listen to stdin, waiting for a 1-byte command;
+      2) read command-related data;
+      3) perform simple command-related operations;
+      4) send 0x00 byte response followed by corresponding data to stdout.
+    """
+    cin, cout = sys.stdin.buffer, sys.stdout.buffer  # Binary I/O streams for communication
 
     sendOk = lambda: cout.write(struct.pack('<B', 0))
 
@@ -204,21 +206,32 @@ HASH_FUNCTIONS = {
     "MD5": 7
 }
 
-# Lambda for get system time in millis
+# Lambda function to get system time in milliseconds
 getTime = lambda: int(round(time.time() * 1000))
 
 
-# IO wrapper and counter class
 class IOCounter:
-    # Constructor
+    """I/O wrapper and counter class for tracking bytes transferred."""
+    
     def __init__(self):
+        """Initialize I/O counter with zero totals."""
         self.inStream = None
         self.outStream = None
         self.inTotal = 0
         self.outTotal = 0
 
-    # Read wrapper
     def read(self, size=None):
+        """Read data from input stream and track bytes received.
+        
+        Args:
+            size: Number of bytes to read. If None, reads all available data.
+            
+        Returns:
+            Bytes read from stream.
+            
+        Raises:
+            IOError: If read was interrupted (received less than requested).
+        """
         if size is None:
             s = self.inStream.read()
         else:
@@ -228,32 +241,37 @@ class IOCounter:
         self.inTotal += len(s)
         return s
 
-    # Write wrapper
     def write(self, s):
+        """Write data to output stream and track bytes sent.
+        
+        Args:
+            s: Bytes to write to stream.
+        """
         self.outStream.write(s)
         self.outTotal += len(s)
         self.outStream.flush()
 
 
-# Exception class for slave side error
 class SlaveError(Exception):
+    """Exception raised for errors on the slave side."""
     pass
 
 
-# Exception class for settings parse error
 class SettingsParseError(Exception):
+    """Exception raised for command-line argument parsing errors."""
     pass
 
 
-# Exception class for action error
 class ActionError(Exception):
+    """Exception raised for synchronization action errors."""
     pass
 
 
-# Settings container and parser class
 class Settings:
-    # Constructor
+    """Settings container and command-line argument parser."""
+    
     def __init__(self):
+        """Initialize settings with default values."""
         self.localPath = ''
         self.remotePath = ''
         self.bitmapPath = ''
@@ -274,8 +292,8 @@ class Settings:
         self.showProgress = False
         self.resetBitmap = False
 
-    # Displays USAGE information
     def displayHelp(self):
+        """Display usage information and available command-line options."""
         print(
             """
 basyn <options>
@@ -327,8 +345,12 @@ Exit codes:
   2 - Copy / sync error (displayed). Data may have partially changed on receiving device, no match guarantees.
 """)
 
-    # Parses argument line, sets extracted values to local fields
     def parseArguments(self):
+        """Parse command-line arguments and set extracted values to instance fields.
+        
+        Raises:
+            SettingsParseError: If arguments are invalid or required options are missing.
+        """
         try:
             opts, args = getopt.getopt(sys.argv[1:], 'l:r:h:p:m:u:a:b:',
                                        ['local=', 'remote=', 'host=', 'port=', 'action=', 'mode=', 'recheck', 'stat',
@@ -405,36 +427,69 @@ Exit codes:
             self.digestSize = hashlib.new(self.hashName).digest_size
 
 
-# Displays information about this script
 def displayAbout():
+    """Display information about this script."""
     print('''
 Block device Advanced SYNcronization utility
 Synchronizes data from block device / file to another local or network (via SSH) block device / file\n''')
 
 
-# Converts byte string to hex string
 def byteToHex(byteStr):
+    """Convert byte string to hexadecimal string representation.
+    
+    Args:
+        byteStr: Bytes to convert.
+        
+    Returns:
+        Hexadecimal string representation.
+    """
     return ''.join(["%02x" % x for x in byteStr]).strip()
 
 
-# Writes string to debug console (stderr currently)
 def logDebug(desc):
+    """Write string to debug console (stderr).
+    
+    Args:
+        desc: Message to write.
+    """
     sys.stderr.write(desc + '\n')
 
 
-# Writes string to stdout
 def logVerbose(desc):
+    """Write timestamped message to stdout.
+    
+    Args:
+        desc: Message to write.
+    """
     print("%s: %s" % (datetime.datetime.today().strftime("%x %X"), desc))
 
 
-# Writes string to debug console, adds \r to preserve line
 def logProgress(desc):
+    """Write string to stderr with carriage return to update the same line.
+    
+    Args:
+        desc: Progress message to display.
+    """
     sys.stderr.write(desc + '\r')
     sys.stderr.flush()
 
 
-# Calls for SSH, remote calls for python, uploads script for it and returns IO wrapper for process streams
 def prepareSlave(settings):
+    """Set up SSH connection (or local pipe) and upload slave script.
+    
+    Reads the slave portion of this script (up to END SLAVE MODE marker),
+    uploads it to the remote host via SSH (or starts local Python process),
+    and returns an I/O wrapper for communication.
+    
+    Args:
+        settings: Settings object containing connection parameters.
+        
+    Returns:
+        IOCounter object wrapping the process streams.
+        
+    Raises:
+        SlaveError: If slave initialization fails.
+    """
     # Reading this script from the beginning to the "#END SLAVE MODE" line
     scriptPath = sys.argv[0]
 
@@ -483,8 +538,21 @@ def prepareSlave(settings):
     return io
 
 
-# Initializes remote device for slave process and returns measured size.
 def initRemoteDevice(io, settings):
+    """Initialize remote device on slave process and return its size.
+    
+    Sends INIT command with settings to the slave and receives device size.
+    
+    Args:
+        io: IOCounter object for communication.
+        settings: Settings object containing device parameters.
+        
+    Returns:
+        Size of the remote device in bytes.
+        
+    Raises:
+        SlaveError: If device not found or initialization fails.
+    """
     # Sending the part of the settings
     sendCommand(io, CMD_INIT)
 
@@ -503,14 +571,28 @@ def initRemoteDevice(io, settings):
     return remoteSize
 
 
-# Sends command to remote script.
 def sendCommand(io, commandCode):
+    """Send command code to remote slave script.
+    
+    Args:
+        io: IOCounter object for communication.
+        commandCode: Command code constant (CMD_*).
+    """
     io.write(struct.pack('<B', commandCode))
 
 
-# Checks if the command was executed on the slave
-# (tries to get 0x00 byte or displays all slave output and raises exception)
 def checkCommand(io):
+    """Check if command was successfully executed on the slave.
+    
+    Reads response byte from slave. If it's 0x00, the command succeeded.
+    Otherwise, reads error message and raises SlaveError.
+    
+    Args:
+        io: IOCounter object for communication.
+        
+    Raises:
+        SlaveError: If slave returned non-zero status.
+    """
     resp = io.read(1)
 
     (status,) = struct.unpack("<B", resp)
@@ -524,7 +606,16 @@ class Syncer:
     """Encapsulation of sync and auxiliary methods with required data fields"""
 
     def __init__(self, settings):
-        """Constructor around settings"""
+        """Initialize Syncer with settings.
+        
+        Opens local and remote devices, determines sync size, and validates configuration.
+        
+        Args:
+            settings: Settings object with synchronization parameters.
+            
+        Raises:
+            ActionError: If device validation fails.
+        """
         self.settings = settings
         self.startTime = 0
 
@@ -559,6 +650,11 @@ class Syncer:
         self.bitmapOffset = 0
 
     def perform(self):
+        """Perform the requested synchronization action.
+        
+        Executes PUSH/PULL with SYNC/COPY mode, displays statistics if requested,
+        and performs recheck if enabled.
+        """
         if self.settings.action != "":
             if self.settings.verbose:
                 logVerbose('Starting to %s / %s data with buffer size %iB' % (self.settings.action, self.settings.mode,
@@ -586,8 +682,8 @@ class Syncer:
         if self.settings.recheck:
             self.doRecheck()
 
-    # Destructor
     def __del__(self):
+        """Clean up resources: close local file and bitmap file."""
         # Closing local file
         if self.localFile:
             self.localFile.close()
@@ -597,6 +693,15 @@ class Syncer:
             self.bitmapFile.close()
 
     def initBitmap(self):
+        """Initialize bitmap file for hash-based synchronization.
+        
+        Creates new bitmap file or validates existing one. The bitmap stores
+        hashes of device blocks for comparison without reading destination.
+        
+        Raises:
+            ActionError: If bitmap validation fails.
+            ValueError: If bitmap parameters don't match current settings.
+        """
         MAGIC_NUMBER = 239840023593485091
 
         hash_id = HASH_FUNCTIONS[self.settings.hashName]
@@ -695,8 +800,14 @@ class Syncer:
             # No remote IO, show only basic stats
             print('STAT. Device size:%iB. Time: %.2fs.' % (self.syncSize, usedTime))
 
-    # Re-checks both sides by computing and comparing hashes for entire device contents
     def doRecheck(self):
+        """Re-check both sides by computing and comparing hashes for entire device.
+        
+        Computes hashes of local and remote devices in parallel and compares them.
+        
+        Raises:
+            ActionError: If hashes don't match after synchronization.
+        """
         if self.settings.verbose:
             logVerbose('Starting total re-check')
             logVerbose('Calculating local hash')
@@ -741,8 +852,14 @@ class Syncer:
         if not match:
             raise ActionError('Local and remote hashes does NOT MATCH after sync')
 
-    # Check is there enough size on the receiving device
     def doSizeCheck(self):
+        """Check if there is enough space on the receiving device.
+        
+        Validates that destination device is large enough for the operation.
+        
+        Raises:
+            ActionError: If device sizes are incompatible for the requested action.
+        """
         if self.settings.verbose:
             logVerbose('Local device %s size is %iB' % (self.settings.localPath, self.localSize))
             logVerbose('Remote device %s size is %iB' % (self.settings.remotePath, self.remoteSize))
@@ -761,6 +878,11 @@ class Syncer:
                                                                                             self.localSize))
 
     def doSync(self):
+        """Perform SYNC operation: transfer only changed blocks.
+        
+        Compares hashes of local and remote blocks, transferring only those that differ.
+        Supports optional chunk-level comparison for fine-grained transfers.
+        """
         getChunk = lambda n: buf[self.settings.chunkSize * n:min(length, self.settings.chunkSize * (n + 1))]
 
         self.localFile.seek(0)
@@ -855,6 +977,10 @@ class Syncer:
         self.bitmapFile.flush()
 
     def doCopy(self):
+        """Perform COPY operation: transfer all data block-by-block.
+        
+        Copies entire device contents from source to destination with compression.
+        """
         # Copying data block-by-block with compression
         self.localFile.seek(0)
         while self.localFile.tell() < self.syncSize:
@@ -875,6 +1001,15 @@ class Syncer:
                 logProgress('COPY progress: %.2f%%' % (100.0 * currentPosition / self.syncSize,))
 
     def _syncCheckStep(self):
+        """Perform single sync check step: compare local and remote block hashes.
+        
+        Returns:
+            Tuple of (match, buffer, position, length) where:
+                match: True if hashes match
+                buffer: local data buffer
+                position: current position in device
+                length: length of data read
+        """
         currentPosition = self.localFile.tell()
         length = min(self.settings.bufferSize, self.syncSize - currentPosition)
 
@@ -897,7 +1032,22 @@ class Syncer:
         return remoteDigest == localDigest, buf, currentPosition, length
 
     def _bsyncCheckStep(self, blockIndex):
-        """Check step for bitmap sync: compares source hash with bitmap hash."""
+        """Check step for bitmap sync: compare source hash with bitmap hash.
+        
+        Reads stored hash from bitmap and compares it with current source hash.
+        Updates bitmap if hashes differ.
+        
+        Args:
+            blockIndex: Index of the block to check.
+            
+        Returns:
+            Tuple of (match, buffer, position, length) where:
+                match: True if hashes match
+                buffer: source data buffer (or None for PULL)
+                position: current position in device
+                length: length of data
+        """
+
         # For bitmap sync, always calculate position from blockIndex
         # (destination file is not read, so tell() would be unreliable)
         currentPosition = blockIndex * self.settings.bufferSize
@@ -941,6 +1091,13 @@ class Syncer:
         return match, buf, currentPosition, length
 
     def _syncPushTransfer(self, buf, currentPosition, length):
+        """Transfer buffer from local to remote device (PUSH).
+        
+        Args:
+            buf: Data buffer to transfer.
+            currentPosition: Position in device to write to.
+            length: Length of data.
+        """
         # Compressing buffer
         compBuffer = zlib.compress(buf, self.settings.zipLevel)
         compLength = len(compBuffer)
@@ -957,6 +1114,12 @@ class Syncer:
                 length, compLength, currentPosition))
 
     def _syncPullTransfer(self, currentPosition, length):
+        """Transfer buffer from remote to local device (PULL).
+        
+        Args:
+            currentPosition: Position in device to read from.
+            length: Length of data to read.
+        """
         # Reading compressed data from remote
         sendCommand(self.remoteIO, CMD_READ)
         self.remoteIO.write(struct.pack("<QQ", currentPosition, length))
@@ -975,6 +1138,16 @@ class Syncer:
                 length, compLength, currentPosition))
 
     def _syncAnalyzeChunks(self, currentPosition, length, getChunkLambda):
+        """Analyze chunks: compute and compare hashes for each chunk in buffer.
+        
+        Args:
+            currentPosition: Starting position of buffer.
+            length: Total length of buffer.
+            getChunkLambda: Lambda function to extract chunk by index.
+            
+        Returns:
+            Tuple of (chunkCount, localDigestList, remoteDigestList).
+        """
         #getChunk = lambda n: buf[self.settings.chunkSize * n:min(length, self.settings.chunkSize * (n + 1))]
 
         chunkCount = int(length / self.settings.chunkSize)
@@ -999,6 +1172,13 @@ class Syncer:
         return chunkCount, localDigestList, remoteDigestList
 
     def __syncPushTransferChunked(self, currentPosition, chunkIndex, getChunkLambda):
+        """Transfer single chunk from local to remote device (PUSH).
+        
+        Args:
+            currentPosition: Starting position of buffer.
+            chunkIndex: Index of chunk to transfer.
+            getChunkLambda: Lambda function to extract chunk by index.
+        """
         # Getting compressed chunk local data
         chunkPosition = currentPosition + self.settings.chunkSize * chunkIndex
         chunk = getChunkLambda(chunkIndex)
@@ -1017,6 +1197,12 @@ class Syncer:
                 chunkIndex, len(chunk), compChunkLength, chunkPosition))
 
     def __syncPullTransferChunked(self, currentPosition, chunkIndex):
+        """Transfer single chunk from remote to local device (PULL).
+        
+        Args:
+            currentPosition: Starting position of buffer.
+            chunkIndex: Index of chunk to transfer.
+        """
         chunkPosition = currentPosition + self.settings.chunkSize * chunkIndex
 
         # Reading chunk from remote
@@ -1039,6 +1225,11 @@ class Syncer:
 
 
 def masterMode():
+    """Main entry point for master mode.
+    
+    Parses settings, creates Syncer instance, and performs requested operation.
+    Handles exceptions and sets appropriate exit codes.
+    """
     settings = Settings()
     try:
         # Parsing config
