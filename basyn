@@ -272,6 +272,7 @@ class Settings:
         self.user = ''
         self.debug = False
         self.showProgress = False
+        self.resetBitmap = False
 
     # Displays USAGE information
     def displayHelp(self):
@@ -313,11 +314,17 @@ Options (* for mandatory, = for value):
                       those stored in the bitmap file. 
                       - When this option is used, you may omit the destination device (--remote for PUSH, 
                       and --local for PULL). In this case, the bitmap file will simply be updated by source device 
-                      hashes, without writing any data to destination device.                                                           
+                      hashes, without writing any data to destination device.
+                      - Can only be used with --mode=SYNC.
+       --reset-bitmap - Force reset (recreate) the bitmap file before sync. The existing bitmap will be truncated and
+                      started from scratch. Use this when you want to rebuild the bitmap
+                      completely, when switching to a different destination device, or when you suspect the bitmap
+                      is corrupted or destination changed unattendedly. Requires --bitmap option.
+                      You may also just delete bitmap file manually before running the script.
 Exit codes:
   0 - A-OK. Data is identical.
   1 - Command line parsing error (displayed). No data was changed.
-  2 - Copy / sync error (displayed). Data may have partitially changed on receiving device, no match guarantees.
+  2 - Copy / sync error (displayed). Data may have partially changed on receiving device, no match guarantees.
 """)
 
     # Parses argument line, sets extracted values to local fields
@@ -326,7 +333,7 @@ Exit codes:
             opts, args = getopt.getopt(sys.argv[1:], 'l:r:h:p:m:u:a:b:',
                                        ['local=', 'remote=', 'host=', 'port=', 'action=', 'mode=', 'recheck', 'stat',
                                         'verbose', 'hash=', 'buffer=', 'chunk=', 'zlevel=', 'user=', 'debug',
-                                        'progress', 'bitmap='])
+                                        'progress', 'bitmap=', 'reset-bitmap'])
 
             for opt, arg in opts:
                 if opt in ("-l", "--local"):
@@ -363,6 +370,8 @@ Exit codes:
                     self.debug = True
                 elif opt == "--progress":
                     self.showProgress = True
+                elif opt == "--reset-bitmap":
+                    self.resetBitmap = True
 
         except getopt.GetoptError as e:
             raise SettingsParseError(str(e))
@@ -388,6 +397,8 @@ Exit codes:
             raise SettingsParseError("--chunk can't be greater than --buffer")
         if self.mode != "SYNC" and self.bitmapPath:
             raise SettingsParseError("--bitmap can be used with --mode==SYNC only")
+        if self.resetBitmap and not self.bitmapPath:
+            raise SettingsParseError("--reset-bitmap requires --bitmap option")
         if self.hashName:
             if self.hashName not in HASH_FUNCTIONS:
                 raise ValueError(f"Unsupported hash function: {self.hashName}")
@@ -592,12 +603,22 @@ class Syncer:
         need_hashes = (self.syncSize + self.settings.bufferSize - 1) // self.settings.bufferSize
         header_format = "<Q Q Q B"  # 8+8+8+1 = 25 bytes
 
+        reset_bitmap = False
+
+        if self.settings.resetBitmap:
+            reset_bitmap = True
+            if self.settings.verbose:
+                logVerbose('Bitmap reset requested - will recreate bitmap')            
+
         try:
             # Open bitmap file
             self.bitmapFile = open(self.settings.bitmapPath, "r+b")
         except FileNotFoundError:
             # Create file with current settings
             self.bitmapFile = open(self.settings.bitmapPath, "w+b")
+            reset_bitmap = True            
+
+        if reset_bitmap:
             hash_block_size = need_hashes * self.settings.digestSize
 
             header = struct.pack(
@@ -607,7 +628,8 @@ class Syncer:
                 self.settings.bufferSize,
                 hash_id
             )
-
+            self.bitmapFile.seek(0)
+            self.bitmapFile.truncate()
             self.bitmapFile.write(header)
             self.bitmapFile.write(bytes(hash_block_size))
 
@@ -876,7 +898,9 @@ class Syncer:
 
     def _bsyncCheckStep(self, blockIndex):
         """Check step for bitmap sync: compares source hash with bitmap hash."""
-        currentPosition = self.localFile.tell() if self.localFile else blockIndex * self.settings.bufferSize
+        # For bitmap sync, always calculate position from blockIndex
+        # (destination file is not read, so tell() would be unreliable)
+        currentPosition = blockIndex * self.settings.bufferSize
         length = min(self.settings.bufferSize, self.syncSize - currentPosition)
 
         # Calculate hash position in bitmap file

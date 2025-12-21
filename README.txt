@@ -3,14 +3,13 @@ INTRODUCTION:
 An idea and some code of this project were borrowed from Bscp project (https://github.com/vog/bscp).
 Special thanks to Volker Diels-Grabsch for providing a simple and effective solution.
 
-Thanks to Volker Diels-Grabsch for simple and effective solution. 
 However, this tool was created to support additional features I needed.
 Copyright information is included at the beginning of the script.
 
 DESCRIPTION:
 
 Basyn stands for "Block device Advanced SYNchronization tool".
-It copies data from one block device (or file) to another � either over the network via SSH or locally.
+It copies data from one block device (or file) to another - either over the network via SSH or locally.
 
 The first device (referred to as the local device) is always on the local machine.
 The second device (the remote device) can reside either on the same machine or on a remote host.
@@ -53,7 +52,7 @@ Options (* for mandatory, = for value):
    -a  --action=    - One of the actions:
                       PUSH - use local device as source, remote - as destination;
                       PULL  - use remote device as source, local - as destination.
-                      If omitted, no data transfer is performed � only device existence is verified.
+                      If omitted, no data transfer is performed - only device existence is verified.
  * -m  --mode=      - One of the synchronization modes (mandatory if any --action selected):
                       SYNC - copy only changed blocks, detected by parallel hash computation and comparison;
                       COPY - copy whole data (recommended for the initial run).
@@ -80,11 +79,16 @@ Options (* for mandatory, = for value):
                         and --local for PULL). In this case, the bitmap file will simply be updated by source device 
                         hashes, without writing any data to destination device.
                       - Can only be used with --mode=SYNC.
+       --reset-bitmap - Force reset (recreate) the bitmap file before sync. The existing bitmap will be truncated and
+                      started from scratch. Use this when you want to rebuild the bitmap
+                      completely, when switching to a different destination device, or when you suspect the bitmap
+                      is corrupted or destination changed unattendedly. Requires --bitmap option.
+                      You may also just delete bitmap file manually before running the script.
 
 Exit codes:
   0 - A-OK. Data is identical.
   1 - Command line parsing error (displayed). No data was changed.
-  2 - Copy / sync error (displayed). Data may have partitially  changed on receiving device, no match guarantees.
+  2 - Copy / sync error (displayed). Data may have partially changed on receiving device, no match guarantees.
 
 EXAMPLES:
 
@@ -136,30 +140,23 @@ Using bitmap file to optimize sync (avoids reading destination):
   Update bitmap only (no destination device writing):
   basyn -l /dev/sda1 -m SYNC -b /root/sda1.bitmap -a PUSH
 
+  Force rebuild bitmap from scratch:
+  basyn -l /dev/sda1 -r /dev/sda1 -h 10.0.0.1 -a PUSH -m SYNC -b /root/sda1.bitmap --reset-bitmap
+
+  Use case: after switching destination device, reset bitmap to match new destination:
+  basyn -l /dev/sda1 -r /dev/new_device -h 10.0.0.1 -a PUSH -m SYNC -b /root/sda1.bitmap --reset-bitmap
+
 NOTES:
 
 1. In any selected mode, at least a one-time sequential read of both devices will be performed during SYNC (and one read and one write during COPY). For slow HDDs and large volume sizes, this process can take hours. It may also reduce the lifespan of the devices if used regularly. If this is a concern, consider using DRBD (Distributed Replicated Block Device) instead. It tracks and marks changed blocks in real time and transfers only necessary changes, monitoring sync state.
 
-2. During COPY/SYNC, esp. of big devices, source device can take some changes by other processes. If changed area already passed by script, those changes will not be transferred to receiving device, and its data can be inconsistent.
-If filesystem on source device is mounted for write, EVEN if it was no data direct writes, some metadata yet can be overwritten, depending of used abstraction layer (atime attribute, for example, by almost any filesystem driver). Things can be worse if device is given to virtual machine, that we cannot stop.
-Even usage of --recheck will not help us to confirm "no-error-state" in those cases, because it is just another full read of devices, it takes time, and while the reading is on, the device can receive more changes by other processes.
-
 2. During COPY/SYNC, especially for large devices, the source device may be modified by other processes. If changes occur in areas that have already been processed by the script, those changes will not be transferred to the receiving device, leading to potential data inconsistency.  
-If the filesystem on the source device is mounted with write access, even without direct data writes, some metadata may still be altered � depending on the abstraction layer in use (e.g., the atime attribute, which is updated by almost all filesystem drivers). The situation becomes even worse if the device is used by a virtual machine that cannot be stopped.  
+If the filesystem on the source device is mounted with write access, even without direct data writes, some metadata may still be altered - depending on the abstraction layer in use (e.g., the atime attribute, which is updated by almost all filesystem drivers). The situation becomes even worse if the device is used by a virtual machine that cannot be stopped.
 
-Even using `--recheck` won't guarantee a "no-error state" in such cases, since it performs yet another full read of both devices � which takes time � and the source may be modified once again during this process.
+Even using `--recheck` won't guarantee a "no-error state" in such cases, since it performs yet another full read of both devices - which takes time - and the source may be modified once again during this process.
 
 Therefore, it is strongly recommended to remount filesystems as read-only during sync, or to use LVM snapshots as the synchronization source.
 For example:
-
-5. Bitmap files store hash values for each buffer-sized block of the source device. The bitmap file structure includes:
-   - Header with magic number, device size, buffer size, and hash function ID
-   - Hash values for all blocks
-   Important considerations when using bitmaps:
-   - The bitmap file must match the device size, buffer size (--buffer), and hash function (--hash). If any of these parameters change, you must delete the old bitmap file and create a new one.
-   - Bitmap files reduce I/O operations by eliminating destination device reads, making sync operations faster, especially for slow devices or high-latency network connections.
-   - When using bitmaps, only the source device is read and compared against stored hashes. Changed blocks are written to the destination (if specified).
-   - Bitmap files can be used for tracking changes without a destination device, allowing you to monitor which blocks have changed over time.
   lvcreate --size 10G --snapshot --name mytome-2sync /dev/vgroup/mytome
   basyn --local=/dev/vgroup/mytome-2sync --remote=/dev/vcopies/mytome --host=10.0.0.1 --action=PUSH --mode=SYNC
   lvremove --force /dev/vgroup/mytome-2sync
@@ -168,5 +165,19 @@ But even using a snapshot is not a silver bullet. Depending on which programs ar
 
 3. The script operates on raw data and is unaware of filesystems. If syncing to an SSD, you have to TRIM manually on the receiving device afterward (using fstrim, for example)
 
-4. You can experiment with --buffer, --chunk, and --zlevel to balance CPU, traffic, and speed. However, your effective speed won't exceed the maximum read/write rates of the source and detination devices or the maximum transter rate of network.
+4. You can experiment with --buffer, --chunk, and --zlevel to balance CPU, traffic, and speed. However, your effective speed won't exceed the maximum read/write rates of the source and destination devices or the maximum transfer rate of network.
 In fact, it may be even lower due to some issues with the script's asynchronous operation on both the local and remote machines.
+
+5. Bitmap files store hash values for each buffer-sized block of the source device. The bitmap file structure includes:
+   - Header with magic number, device size, buffer size, and hash function ID
+   - Hash values for all blocks
+   Important considerations when using bitmaps:
+   - The bitmap file must match the device size, buffer size (--buffer), and hash function (--hash). If any of these parameters change, you must delete the old bitmap file and create a new one, or use --reset-bitmap.
+   - Bitmap files reduce I/O operations by eliminating destination device reads and exchanging of hashes, making sync operations faster, especially for slow devices or high-latency network connections.
+   - When using bitmaps, only the source device is read and compared against stored hashes. Changed blocks are written to the destination (if specified).
+   - Bitmap files can be used for tracking changes without a destination device, allowing you to monitor which blocks have changed over time.
+   - Use --reset-bitmap flag to force recreation of the bitmap file. This is useful when:
+     * Switching to a different destination device
+     * Suspecting bitmap corruption or desynchronization
+     * Wanting to establish a new baseline after major changes
+     * Troubleshooting sync issues related to bitmap state
