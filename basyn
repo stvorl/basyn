@@ -929,7 +929,11 @@ class Syncer:
 
     def doBSync(self):
         """Performs synchronization using bitmap file for comparison."""
+        import time
+        
         getChunk = lambda n: buf[self.settings.chunkSize * n:min(length, self.settings.chunkSize * (n + 1))]
+
+        FSYNC_TIME_INTERVAL = 5.0  # seconds
 
         # Reset position
         if self.localFile:
@@ -937,51 +941,65 @@ class Syncer:
 
         blockIndex = 0
         currentPosition = 0
+        last_fsync_time = time.time()
 
-        while currentPosition < self.syncSize:
-            match, buf, currentPosition, length = self._bsyncCheckStep(blockIndex)
+        try:
+            while currentPosition < self.syncSize:
+                match, buf, currentPosition, length = self._bsyncCheckStep(blockIndex)
 
-            # Checking if source and bitmap hashes match each other, and, if not, transferring the data buffer
-            if not match:
-                # Transfer data if destination device is present
-                if (self.settings.action == "PUSH" and self.settings.remotePath) or \
-                   (self.settings.action == "PULL" and self.settings.localPath):
+                # Checking if source and bitmap hashes match each other, and, if not, transferring the data buffer
+                if not match:
+                    # Transfer data if destination device is present
+                    if (self.settings.action == "PUSH" and self.settings.remotePath) or \
+                       (self.settings.action == "PULL" and self.settings.localPath):
 
-                    # Straight syncing with big buffer (no chunks)
-                    if self.settings.chunkSize == 0:
-                        if self.settings.action == "PUSH":
-                            self._syncPushTransfer(buf, currentPosition, length)
+                        # Straight syncing with big buffer (no chunks)
+                        if self.settings.chunkSize == 0:
+                            if self.settings.action == "PUSH":
+                                self._syncPushTransfer(buf, currentPosition, length)
 
-                        if self.settings.action == "PULL":
-                            self._syncPullTransfer(currentPosition, length)
+                            if self.settings.action == "PULL":
+                                self._syncPullTransfer(currentPosition, length)
 
-                    # Syncing with chunks
-                    else:
-                        chunkCount, localDigestList, remoteDigestList = self._syncAnalyzeChunks(currentPosition, length,
-                                                                                                getChunk)
-                        # Comparing hashes and writing only necessary small chunks
-                        for i in range(0, chunkCount):
-                            if localDigestList[i] != remoteDigestList[i]:
-                                if self.settings.action == "PUSH":
-                                    self.__syncPushTransferChunked(currentPosition, i, getChunk)
+                        # Syncing with chunks
+                        else:
+                            chunkCount, localDigestList, remoteDigestList = self._syncAnalyzeChunks(currentPosition, length,
+                                                                                                    getChunk)
+                            # Comparing hashes and writing only necessary small chunks
+                            for i in range(0, chunkCount):
+                                if localDigestList[i] != remoteDigestList[i]:
+                                    if self.settings.action == "PUSH":
+                                        self.__syncPushTransferChunked(currentPosition, i, getChunk)
 
-                                if self.settings.action == "PULL":
-                                    self.__syncPullTransferChunked(currentPosition, i)
+                                    if self.settings.action == "PULL":
+                                        self.__syncPullTransferChunked(currentPosition, i)
 
-                        # In case of PULL we used to write chunks in "random" positions, so we should return to expected pos
-                        if self.settings.action == "PULL" and self.localFile:
-                            self.localFile.seek(currentPosition + length)
+                            # In case of PULL we used to write chunks in "random" positions, so we should return to expected pos
+                            if self.settings.action == "PULL" and self.localFile:
+                                self.localFile.seek(currentPosition + length)
 
-            # Move to next block
-            blockIndex += 1
-            currentPosition += length
+                # Move to next block
+                blockIndex += 1
+                currentPosition += length
 
-            # Progress indication
-            if self.settings.showProgress:
-                logProgress('BSYNC progress: %.2f%%' % (100.0 * currentPosition / self.syncSize,))
+                # Periodic fsync based on time
+                current_time = time.time()
+                if current_time - last_fsync_time >= FSYNC_TIME_INTERVAL:
+                    if self.settings.debug:
+                        logDebug(f'Periodic fsync after {current_time - last_fsync_time:.1f}s')
+                    os.fsync(self.bitmapFile.fileno())
+                    last_fsync_time = current_time
 
-        # Ensure bitmap is flushed to disk
-        self.bitmapFile.flush()
+                # Progress indication
+                if self.settings.showProgress:
+                    logProgress('BSYNC progress: %.2f%%' % (100.0 * currentPosition / self.syncSize,))
+
+        finally:
+            # Final fsync - always, regardless of how we exited (normal, Ctrl+C, exception)
+            if self.settings.debug:
+                logDebug('Final bitmap fsync')
+            self.bitmapFile.flush()
+            os.fsync(self.bitmapFile.fileno())
 
     def doCopy(self):
         """Perform COPY operation: transfer all data block-by-block.

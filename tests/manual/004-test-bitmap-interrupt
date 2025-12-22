@@ -1,0 +1,91 @@
+#!/bin/bash
+
+# Test: Bitmap PUSH SYNC on BIG file (1GB) - for manual interrupt testing
+
+# Load environment variables
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+source "${SCRIPT_DIR}/../tests-env"
+
+# Override tmpdir to use /tmp instead of ramdisk for this big test
+TMPDIR="/tmp"
+SOURCE_FILE="${TMPDIR}/basyn_source_$$"
+DEST_FILE="${TMPDIR}/basyn_dest_$$"
+BITMAP_FILE="${TMPDIR}/basyn_bitmap_$$"
+
+# Get current user dynamically
+CURRENT_USER=$(whoami)
+
+# Override file size for this test - use 500MB (reasonable for testing)
+BIG_FILE_SIZE_MB=500
+
+echo "Testing Bitmap PUSH SYNC on BIG file (${BIG_FILE_SIZE_MB}MB)"
+echo
+
+# Create source file filled with /dev/urandom
+echo "Creating BIG source file (${BIG_FILE_SIZE_MB}MB)..."
+dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=$BIG_FILE_SIZE_MB status=progress
+
+# Create dest file filled with zeros
+echo "Creating dest file..."
+dd if=/dev/zero of="$DEST_FILE" bs=1M count=$BIG_FILE_SIZE_MB status=progress
+echo
+
+# Test: Full sync with bitmap creation
+echo "Running PUSH SYNC with bitmap creation (${BIG_FILE_SIZE_MB}MB)..."
+echo "This will take a while depending on your system..."
+"$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -h localhost -u "$CURRENT_USER" \
+    -a PUSH -m SYNC -b "$BITMAP_FILE" --stat --progress
+RESULT=$?
+echo
+
+if [ $RESULT -eq 0 ]; then
+    print_success "Initial sync completed successfully"
+    
+    # Verify files are identical
+    if cmp -s "$SOURCE_FILE" "$DEST_FILE"; then
+        print_success "Files are identical after sync"
+        RESULT=0
+    else
+        print_error "Files differ after sync"
+        RESULT=1
+    fi
+else
+    print_error "Sync failed"
+    RESULT=1
+fi
+
+echo
+echo "========================================"
+echo "FILES FOR MANUAL TESTING:"
+echo "========================================"
+echo "Source:  $SOURCE_FILE"
+echo "Dest:    $DEST_FILE"
+echo "Bitmap:  $BITMAP_FILE"
+echo
+echo "To cleanup after testing:"
+echo "   rm -f \"$SOURCE_FILE\" \"$DEST_FILE\" \"$BITMAP_FILE\""
+echo
+
+exit 0
+# Cleanup instructions (but don't auto-cleanup for manual testing)
+if [ "$CLEANUP" = "1" ]; then
+    rm -f "$SOURCE_FILE" "$DEST_FILE" "$BITMAP_FILE"
+else
+    echo "========================================"
+    echo "FILES LEFT FOR MANUAL TESTING:"
+    echo "========================================"
+    echo "Source:  $SOURCE_FILE"
+    echo "Dest:    $DEST_FILE"
+    echo "Bitmap:  $BITMAP_FILE"
+    echo
+    echo "Commands for manual testing:"
+    echo "  # Modify source and resync with bitmap"
+    echo "  echo -n 'X' | dd of=\"$SOURCE_FILE\" bs=1 count=1 seek=\$((500 * 1024 * 1024)) conv=notrunc 2>/dev/null"
+    echo "  $BASYN -l \"$SOURCE_FILE\" -r \"$DEST_FILE\" -h localhost -u \"$CURRENT_USER\" -a PUSH -m SYNC -b \"$BITMAP_FILE\" --stat --progress"
+    echo
+    echo "To cleanup:"
+    echo "  rm -f \"$SOURCE_FILE\" \"$DEST_FILE\" \"$BITMAP_FILE\""
+    echo
+fi
+
+exit $RESULT
