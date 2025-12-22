@@ -807,56 +807,57 @@ class Syncer:
             print('STAT. Device size:%iB. Time: %.2fs.' % (self.syncSize, usedTime))
 
     def doRecheck(self):
-        """Re-check both sides by computing and comparing hashes for entire device.
+        """Re-check both sides by computing and comparing hashes block-by-block.
         
-        Computes hashes of local and remote devices in parallel and compares them.
+        Compares hashes of local and remote blocks sequentially, stopping at first mismatch.
+        This approach is faster and allows for proper interruption handling.
         
         Raises:
             ActionError: If hashes don't match after synchronization.
         """
         if self.settings.verbose:
-            logVerbose('Starting total re-check')
-            logVerbose('Calculating local hash')
+            logVerbose('Starting block-by-block re-check')
 
-        # An order for slave to start computing its hash for entire device
-        sendCommand(self.remoteIO, CMD_HASH)
-        self.remoteIO.write(struct.pack("<QQ", 0, self.syncSize))
-
-        # We can compute our hash in parallel, while slave is busy
-        # Reading requested length by bufferSize chunks, and updating them to hash
-        hashFunc = hashlib.new(self.settings.hashName)
         self.localFile.seek(0)
-        bytesLeft = self.syncSize
-        while bytesLeft > 0:
-            bytesToRead = min(bytesLeft, self.settings.bufferSize)
-            hashFunc.update(self.localFile.read(bytesToRead))
-            bytesLeft -= bytesToRead
+        currentPosition = 0
+        
+        while currentPosition < self.syncSize:
+            length = min(self.settings.bufferSize, self.syncSize - currentPosition)
+
+            # Request remote hash for this block
+            sendCommand(self.remoteIO, CMD_HASH)
+            self.remoteIO.write(struct.pack("<QQ", currentPosition, length))
+
+            # Compute local hash for this block
+            localBuf = self.localFile.read(length)
+            localDigest = hashlib.new(self.settings.hashName, localBuf).digest()
+
+            # Get remote hash
+            checkCommand(self.remoteIO)
+            remoteDigest = self.remoteIO.read(self.settings.digestSize)
+
+            # Compare hashes
+            if localDigest != remoteDigest:
+                if self.settings.verbose:
+                    logVerbose('Mismatch found at position %d' % currentPosition)
+                    logVerbose('Local hash %s does NOT MATCH remote hash %s' % (
+                        byteToHex(localDigest), byteToHex(remoteDigest)))
+                elif self.settings.showProgress:
+                    print("")
+                raise ActionError('Local and remote hashes does NOT MATCH at position %d' % currentPosition)
+
+            currentPosition += length
 
             # Progress indication
             if self.settings.showProgress:
-                logProgress('RECHECK hash calculation (local): %.2f%%' %
-                            (100.0 * self.localFile.tell() / self.syncSize,))
+                logProgress('RECHECK: %.2f%%' % (100.0 * currentPosition / self.syncSize,))
 
-        # Getting final local digest
-        localDigest = hashFunc.digest()
-
-        # And remote digest, that should be ready (or we'll wait for it)
+        # All blocks matched
         if self.settings.verbose:
-            logVerbose('Waiting for remote side hash calculation...')
-        checkCommand(self.remoteIO)
-        remoteDigest = self.remoteIO.read(self.settings.digestSize)
-
-        # And what would be outcome?
-        match = (remoteDigest == localDigest)
-
-        if self.settings.verbose:
-            logVerbose('Local hash %s %s remote hash %s' % (
-                byteToHex(localDigest), 'MATCHES' if match else 'does NOT MATCH', byteToHex(remoteDigest)))
+            logVerbose('All blocks matched - devices are identical')
         elif self.settings.showProgress:
             print("")
 
-        if not match:
-            raise ActionError('Local and remote hashes does NOT MATCH after sync')
 
     def doSizeCheck(self):
         """Check if there is enough space on the receiving device.

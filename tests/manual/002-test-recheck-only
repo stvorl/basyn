@@ -1,0 +1,71 @@
+#!/bin/bash
+
+# Test: Recheck only (without sync) - tests if slave process terminates correctly on Ctrl+C
+
+# Load environment variables
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+source "${SCRIPT_DIR}/../tests-env"
+
+# Get current user dynamically
+CURRENT_USER=$(whoami)
+
+echo "Testing RECHECK only operation (no sync) as ${CURRENT_USER}@localhost"
+echo "This test verifies that slave process terminates correctly on Ctrl+C during recheck"
+echo
+
+# Create source file filled with /dev/urandom
+echo "Creating source file..."
+dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=$TEST_FILE_SIZE_MB status=progress
+
+# Create identical dest file (copy of source)
+echo "Creating identical dest file..."
+cp "$SOURCE_FILE" "$DEST_FILE"
+echo
+
+# Test 1: RECHECK only without action (should pass - files are identical)
+echo "Test 1: Running RECHECK without action (files are identical)..."
+"$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -h localhost -u "$CURRENT_USER" --recheck --stat --progress
+RESULT1=$?
+echo
+
+if [ $RESULT1 -eq 0 ]; then
+    print_success "RECHECK passed - files are identical"
+else
+    print_error "RECHECK failed - files should be identical"
+    RESULT=1
+fi
+
+# Test 2: Modify dest file and check that recheck detects difference
+echo "Test 2: Modifying dest file and running RECHECK (should detect difference)..."
+# Write a different byte at the beginning
+echo -n "X" | dd of="$DEST_FILE" bs=1 count=1 conv=notrunc 2>/dev/null
+
+"$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -h localhost -u "$CURRENT_USER" --recheck --stat --progress 2>&1
+RESULT2=$?
+echo
+
+if [ $RESULT2 -ne 0 ]; then
+    print_success "RECHECK correctly detected difference"
+    RESULT=0
+else
+    print_error "RECHECK should have detected difference"
+    RESULT=1
+fi
+
+echo
+echo "MANUAL TEST:"
+echo "Now you can manually test Ctrl+C during recheck:"
+echo "1. Restore identical files:"
+echo "   cp \"$SOURCE_FILE\" \"$DEST_FILE\""
+echo "2. Run recheck and press Ctrl+C during operation:"
+echo "   $BASYN -l \"$SOURCE_FILE\" -r \"$DEST_FILE\" -h localhost -u \"$CURRENT_USER\" --recheck --stat --progress"
+echo "3. Check that no basyn/python processes are left running:"
+echo "   ps aux | grep -E 'python3.*basyn|ssh.*python3'"
+echo
+
+# Cleanup temporary files
+if [ "$CLEANUP" = "1" ]; then
+    rm -f "$SOURCE_FILE" "$DEST_FILE"
+fi
+
+exit $RESULT

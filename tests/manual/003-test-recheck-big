@@ -1,0 +1,107 @@
+#!/bin/bash
+
+# Test: Recheck only on BIG file (1GB) - tests if slave process terminates correctly on Ctrl+C
+
+# Load environment variables
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+source "${SCRIPT_DIR}/../tests-env"
+
+# Override tmpdir to use /tmp instead of ramdisk for this big test
+TMPDIR="/tmp"
+SOURCE_FILE="${TMPDIR}/basyn_source_$$"
+DEST_FILE="${TMPDIR}/basyn_dest_$$"
+
+# Get current user dynamically
+CURRENT_USER=$(whoami)
+
+# Override file size for this test - use 1GB
+BIG_FILE_SIZE_MB=1024
+
+echo "Testing RECHECK only operation on BIG file (${BIG_FILE_SIZE_MB}MB) as ${CURRENT_USER}@localhost"
+echo "This test verifies that slave process terminates correctly on Ctrl+C during long recheck"
+echo
+
+# Create source file filled with /dev/urandom
+echo "Creating BIG source file (${BIG_FILE_SIZE_MB}MB)..."
+dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=$BIG_FILE_SIZE_MB status=progress
+
+# Create identical dest file (copy of source)
+echo "Creating identical dest file..."
+cp "$SOURCE_FILE" "$DEST_FILE"
+echo
+
+# Test 1: RECHECK only without action (should pass - files are identical)
+echo "Test 1: Running RECHECK without action on ${BIG_FILE_SIZE_MB}MB files (files are identical)..."
+"$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -h localhost -u "$CURRENT_USER" --recheck --stat --progress
+RESULT1=$?
+echo
+
+if [ $RESULT1 -eq 0 ]; then
+    print_success "RECHECK passed - files are identical"
+else
+    print_error "RECHECK failed - files should be identical"
+    RESULT=1
+fi
+
+# Test 2: Modify dest file and check that recheck detects difference
+echo "Test 2: Modifying dest file in the MIDDLE and running RECHECK (should detect difference)..."
+# Write a different byte at position 512MB (middle of 1GB file)
+MODIFY_POSITION=$((512 * 1024 * 1024))
+echo -n "X" | dd of="$DEST_FILE" bs=1 count=1 seek=$MODIFY_POSITION conv=notrunc 2>/dev/null
+echo "Modified byte at position ${MODIFY_POSITION} (512MB into file)"
+echo
+
+"$BASYN" -l "$SOURCE_FILE" -r "$DEST_FILE" -h localhost -u "$CURRENT_USER" --recheck --stat --progress 2>&1
+RESULT2=$?
+echo
+
+if [ $RESULT2 -ne 0 ]; then
+    print_success "RECHECK correctly detected difference"
+    RESULT=0
+else
+    print_error "RECHECK should have detected difference"
+    RESULT=1
+fi
+
+echo
+echo "========================================"
+echo "MANUAL TEST for Ctrl+C handling:"
+echo "========================================"
+echo "Test 3a: Modify file near the END (at 900MB) and check early detection:"
+echo "   echo -n 'X' | dd of=\"$DEST_FILE\" bs=1 count=1 seek=\$((900 * 1024 * 1024)) conv=notrunc 2>/dev/null"
+echo "   $BASYN -l \"$SOURCE_FILE\" -r \"$DEST_FILE\" -h localhost -u \"$CURRENT_USER\" --recheck --stat --progress"
+echo "   (Should stop at ~900MB, not read the whole 1GB)"
+echo
+echo "Test 3b: Restore identical files and test Ctrl+C:"
+echo "   cp \"$SOURCE_FILE\" \"$DEST_FILE\""
+echo
+echo "   Run recheck and press Ctrl+C during operation (after a few seconds):"
+echo "   $BASYN -l \"$SOURCE_FILE\" -r \"$DEST_FILE\" -h localhost -u \"$CURRENT_USER\" --recheck --stat --progress"
+echo
+echo "   IMMEDIATELY check that no basyn/python processes are left running:"
+echo "   ps aux | grep -E 'python3.*basyn|ssh.*python3' | grep -v grep"
+echo
+echo "4. If you see hanging processes, note their PIDs and check what they're doing:"
+echo "   sudo lsof -p <PID>  # to see open files"
+echo "   sudo strace -p <PID>  # to see system calls"
+echo
+echo "Expected behavior:"
+echo "  - Recheck stops at first mismatch (doesn't read beyond that point)"
+echo "  - Slave process terminates immediately after Ctrl+C"
+echo "  - No python3 or ssh processes should remain running"
+echo "  - Files should be closed properly"
+echo "  - With new block-by-block algorithm, recheck is interruptible at buffer boundaries (~2MB)"
+echo
+
+# Cleanup temporary files
+if [ "$CLEANUP" = "1" ]; then
+    rm -f "$SOURCE_FILE" "$DEST_FILE"
+else
+    echo "Files left for manual testing:"
+    echo "  SOURCE: $SOURCE_FILE"
+    echo "  DEST:   $DEST_FILE"
+    echo
+    echo "To cleanup manually: rm -f \"$SOURCE_FILE\" \"$DEST_FILE\""
+fi
+
+exit $RESULT
