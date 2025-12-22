@@ -175,6 +175,7 @@ def slaveMode():
                 compBuffer = cin.read(compLength)
                 localFile.seek(position)
                 localFile.write(zlib.decompress(compBuffer))
+                os.fsync(localFile.fileno())  # Ensure data is written to disk before confirming
 
                 sendOk()
                 cout.flush()
