@@ -40,14 +40,12 @@ CMD_WRITE = 14
 # In case of "local" connection, pipeline with separate Python instance will be used.
 
 def slaveMode():
-    """Slave mode handler.
-    
-    This simple function loops to:
-      1) listen to stdin, waiting for a 1-byte command;
-      2) read command-related data;
-      3) perform simple command-related operations;
-      4) send 0x00 byte response followed by corresponding data to stdout.
-    """
+    # Slave mode handler.
+    # This simple function loops to:
+    #   1) listen to stdin, waiting for a 1-byte command;
+    #   2) read command-related data;
+    #   3) perform simple command-related operations;
+    #   4) send 0x00 byte response followed by corresponding data to stdout.
     cin, cout = sys.stdin.buffer, sys.stdout.buffer  # Binary I/O streams for communication
 
     sendOk = lambda: cout.write(struct.pack('<B', 0))
