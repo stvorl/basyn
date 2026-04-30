@@ -1,7 +1,7 @@
 INTRODUCTION:
 
-An idea and some code of this project were borrowed from Bscp project (https://github.com/vog/bscp).
-Special thanks to Volker Diels-Grabsch for providing a simple and effective solution.
+The general concept of this project was inspired by Bscp (https://github.com/vog/bscp).
+Special thanks to Volker Diels-Grabsch for the original idea.
 
 However, this tool was created to support additional features I needed.
 Copyright information is included at the beginning of the script.
