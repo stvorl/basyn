@@ -1,0 +1,92 @@
+#!/bin/bash
+
+# Test: PULL SYNC with BITMAP UPDATE (--update-bitmap)
+# This test verifies that --update-bitmap correctly handles the case when the
+# destination (local) has been independently modified (bitmap is stale relative to dest).
+# Regular bsync would not detect or fix such changes; --update-bitmap does.
+
+# Load environment variables
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+source "${SCRIPT_DIR}/../tests-env"
+
+BITMAP_FILE="${TMPDIR}/basyn_bitmap_$$"
+
+echo "==== Test PULL SYNC with BITMAP UPDATE ===="
+echo
+
+# Step 1: Create remote (source) file filled with /dev/urandom
+echo "Step 1: Creating remote source file..."
+dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count=$TEST_FILE_SIZE_MB status=none
+
+# Create local (dest) file filled with zeros
+echo "Step 2: Creating local destination file..."
+dd if=/dev/zero of="$DEST_FILE" bs=1M count=$TEST_FILE_SIZE_MB status=none
+
+# Step 3: Initial PULL sync with bitmap
+echo "Step 3: Initial PULL sync with bitmap creation..."
+"$BASYN" -l "$DEST_FILE" -r "$SOURCE_FILE" -a PULL -m SYNC --hash="$TEST_HASH_FUNC" --buffer="$TEST_BUFFER_SIZE" --bitmap="$BITMAP_FILE" --stat --progress
+echo
+
+if ! cmp -s "$SOURCE_FILE" "$DEST_FILE"; then
+    print_error "PULL SYNC BITMAP UPDATE failed - initial sync did not match"
+    [ "$CLEANUP" = "1" ] && rm -f "$SOURCE_FILE" "$DEST_FILE" "$BITMAP_FILE"
+    exit 1
+fi
+echo "Initial sync successful - files match"
+echo
+
+# Step 4: Modify destination (local) file independently (bitmap does not know about this)
+echo "Step 4: Modifying local destination file independently..."
+MODIFY_SIZE=$(( TEST_FILE_SIZE_MB / 4 ))
+[ $MODIFY_SIZE -lt 1 ] && MODIFY_SIZE=1
+SEEK_POS=$(( TEST_FILE_SIZE_MB / 2 ))
+dd if=/dev/urandom of="$DEST_FILE" bs=1M count=$MODIFY_SIZE seek=$SEEK_POS conv=notrunc status=none
+echo "Destination modified at offset ${SEEK_POS}MB (${MODIFY_SIZE}MB changed)"
+echo
+
+# Step 5: Regular bsync should NOT detect or fix dest changes (bitmap matches source)
+echo "Step 5: Regular bsync (should not fix dest changes - bitmap still matches source)..."
+"$BASYN" -l "$DEST_FILE" -r "$SOURCE_FILE" -a PULL -m SYNC --hash="$TEST_HASH_FUNC" --buffer="$TEST_BUFFER_SIZE" --bitmap="$BITMAP_FILE" --stat --progress
+echo
+
+if cmp -s "$SOURCE_FILE" "$DEST_FILE"; then
+    print_error "PULL SYNC BITMAP UPDATE failed - files should still differ after regular bsync"
+    [ "$CLEANUP" = "1" ] && rm -f "$SOURCE_FILE" "$DEST_FILE" "$BITMAP_FILE"
+    exit 1
+fi
+echo "Files still differ after regular bsync (as expected)"
+echo
+
+# Step 6: Sync with --update-bitmap (should read dest, detect diff, fix it, update bitmap)
+echo "Step 6: PULL sync with --update-bitmap (should fix dest and update bitmap)..."
+"$BASYN" -l "$DEST_FILE" -r "$SOURCE_FILE" -a PULL -m SYNC --hash="$TEST_HASH_FUNC" --buffer="$TEST_BUFFER_SIZE" --bitmap="$BITMAP_FILE" --update-bitmap --stat --progress
+echo
+
+if ! cmp -s "$SOURCE_FILE" "$DEST_FILE"; then
+    print_error "PULL SYNC BITMAP UPDATE failed - files do not match after --update-bitmap"
+    [ "$CLEANUP" = "1" ] && rm -f "$SOURCE_FILE" "$DEST_FILE" "$BITMAP_FILE"
+    exit 1
+fi
+echo "Files match after --update-bitmap"
+echo
+
+# Step 7: Verify bitmap is now up to date - regular bsync should not transfer anything
+echo "Step 7: Verifying bitmap is updated - regular bsync should be a no-op..."
+"$BASYN" -l "$DEST_FILE" -r "$SOURCE_FILE" -a PULL -m SYNC --hash="$TEST_HASH_FUNC" --buffer="$TEST_BUFFER_SIZE" --bitmap="$BITMAP_FILE" --stat
+echo
+
+# Check files still match
+if cmp -s "$SOURCE_FILE" "$DEST_FILE"; then
+    print_success "PULL SYNC BITMAP UPDATE working - files match and bitmap is current"
+    RESULT=0
+else
+    print_error "PULL SYNC BITMAP UPDATE failed - files diverged unexpectedly"
+    RESULT=1
+fi
+
+# Cleanup temporary files
+if [ "$CLEANUP" = "1" ]; then
+    rm -f "$SOURCE_FILE" "$DEST_FILE" "$BITMAP_FILE"
+fi
+
+exit $RESULT

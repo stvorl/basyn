@@ -290,6 +290,7 @@ class Settings:
         self.debug = False
         self.showProgress = False
         self.resetBitmap = False
+        self.updateBitmap = False
 
     def displayHelp(self):
         """Display usage information and available command-line options."""
@@ -333,11 +334,18 @@ Options (* for mandatory, = for value):
                       and --local for PULL). In this case, the bitmap file will simply be updated by source device 
                       hashes, without writing any data to destination device.
                       - Can only be used with --mode=SYNC.
-       --reset-bitmap - Force reset (recreate) the bitmap file before sync. The existing bitmap will be truncated and
-                      started from scratch. Use this when you want to rebuild the bitmap
-                      completely, when switching to a different destination device, or when you suspect the bitmap
-                      is corrupted or destination changed unattendedly. Requires --bitmap option.
-                      You may also just delete bitmap file manually before running the script.
+       --reset-bitmap - Force reset (recreate) the bitmap file before sync. The existing bitmap will be
+                      started from scratch (all blocks marked as changed). Use this when you want to rebuild the
+                      bitmap completely, when switching to a different destination device, or when you suspect the
+                      destination or bitmap were heavily corrupted by independent write, and you don't want destination 
+                      device to be re-read, but don't mind all data to be transferred again.
+                      You may also just delete bitmap file manually.
+                      Requires --bitmap option. Cannot be combined with --update-bitmap.
+       --update-bitmap - Perform a regular SYNC (reads both source and destination, transfers only changed blocks),
+                      and simultaneously update the bitmap file with current source hashes. Use this when the
+                      destination device may have been partially modified, the bitmap is out of sync with it, but you want to save
+                      traffic by not transferring unchanged data, and full re-read of destination device isn't a problem.
+                      Requires --bitmap option. Cannot be combined with --reset-bitmap.
 Exit codes:
   0 - A-OK. Data is identical.
   1 - Command line parsing error (displayed). No data was changed.
@@ -354,7 +362,7 @@ Exit codes:
             opts, args = getopt.getopt(sys.argv[1:], 'l:r:h:p:m:u:a:b:',
                                        ['local=', 'remote=', 'host=', 'port=', 'action=', 'mode=', 'recheck', 'stat',
                                         'verbose', 'hash=', 'buffer=', 'chunk=', 'zlevel=', 'user=', 'debug',
-                                        'progress', 'bitmap=', 'reset-bitmap'])
+                                        'progress', 'bitmap=', 'reset-bitmap', 'update-bitmap'])
 
             for opt, arg in opts:
                 if opt in ("-l", "--local"):
@@ -393,6 +401,8 @@ Exit codes:
                     self.showProgress = True
                 elif opt == "--reset-bitmap":
                     self.resetBitmap = True
+                elif opt == "--update-bitmap":
+                    self.updateBitmap = True
 
         except getopt.GetoptError as e:
             raise SettingsParseError(str(e))
@@ -420,6 +430,10 @@ Exit codes:
             raise SettingsParseError("--bitmap can be used with --mode==SYNC only")
         if self.resetBitmap and not self.bitmapPath:
             raise SettingsParseError("--reset-bitmap requires --bitmap option")
+        if self.updateBitmap and not self.bitmapPath:
+            raise SettingsParseError("--update-bitmap requires --bitmap option")
+        if self.updateBitmap and self.resetBitmap:
+            raise SettingsParseError("--update-bitmap and --reset-bitmap cannot be used together")
         if self.hashName:
             if self.hashName not in HASH_FUNCTIONS:
                 raise ValueError(f"Unsupported hash function: {self.hashName}")
@@ -666,7 +680,7 @@ class Syncer:
                 self.initBitmap()
 
             if self.settings.mode == "SYNC":
-                if self.bitmapFile:
+                if self.bitmapFile and not self.settings.updateBitmap:
                     self.doBSync()
                 else:
                     self.doSync()
@@ -857,7 +871,6 @@ class Syncer:
         elif self.settings.showProgress:
             print("")
 
-
     def doSizeCheck(self):
         """Check if there is enough space on the receiving device.
         
@@ -885,51 +898,80 @@ class Syncer:
 
     def doSync(self):
         """Perform SYNC operation: transfer only changed blocks.
-        
+
         Compares hashes of local and remote blocks, transferring only those that differ.
+        If --update-bitmap is set, writes current source hashes into the bitmap file for
+        every block processed.
         Supports optional chunk-level comparison for fine-grained transfers.
         """
+        FSYNC_TIME_INTERVAL = 5.0  # seconds
+
         getChunk = lambda n: buf[self.settings.chunkSize * n:min(length, self.settings.chunkSize * (n + 1))]
 
         self.localFile.seek(0)
+        blockIndex = 0
+        last_fsync_time = time.time()
 
-        while self.localFile.tell() < self.syncSize:
-            match, buf, currentPosition, length = self._syncCheckStep()
+        try:
+            while self.localFile.tell() < self.syncSize:
+                match, buf, currentPosition, length, sourceDigest = self._syncCheckStep()
 
-            # Checking if local and remote hashes match each other, and, if not, transferring the data buffer
-            if not match:
-                # Straight syncing with big buffer (no chunks)
-                if self.settings.chunkSize == 0:
-                    if self.settings.action == "PUSH":
-                        self._syncPushTransfer(buf, currentPosition, length)
+                # Update bitmap with current source hash (--update-bitmap mode)
+                if self.bitmapFile and self.settings.updateBitmap:
+                    self.bitmapFile.seek(self.bitmapOffset + blockIndex * self.settings.digestSize)
+                    self.bitmapFile.write(sourceDigest)
 
-                    if self.settings.action == "PULL":
-                        self._syncPullTransfer(currentPosition, length)
+                # Checking if local and remote hashes match each other, and, if not, transferring the data buffer
+                if not match:
+                    # Straight syncing with big buffer (no chunks)
+                    if self.settings.chunkSize == 0:
+                        if self.settings.action == "PUSH":
+                            self._syncPushTransfer(buf, currentPosition, length)
 
-                # Syncing with chunks
-                else:
-                    chunkCount, localDigestList, remoteDigestList = self._syncAnalyzeChunks(currentPosition, length,
-                                                                                            getChunk)
-                    # Comparing hashes and writing only necessary small chunks
-                    for i in range(0, chunkCount):
-                        if localDigestList[i] != remoteDigestList[i]:
-                            if self.settings.action == "PUSH":
-                                self.__syncPushTransferChunked(currentPosition, i, getChunk)
+                        if self.settings.action == "PULL":
+                            self._syncPullTransfer(currentPosition, length)
 
-                            if self.settings.action == "PULL":
-                                self.__syncPullTransferChunked(currentPosition, i)
+                    # Syncing with chunks
+                    else:
+                        chunkCount, localDigestList, remoteDigestList = self._syncAnalyzeChunks(currentPosition, length,
+                                                                                                getChunk)
+                        # Comparing hashes and writing only necessary small chunks
+                        for i in range(0, chunkCount):
+                            if localDigestList[i] != remoteDigestList[i]:
+                                if self.settings.action == "PUSH":
+                                    self.__syncPushTransferChunked(currentPosition, i, getChunk)
 
-                    # In case of PULL we used to write chunks in "random" positions, so we should return to expected pos
-                    self.localFile.seek(currentPosition + length)
+                                if self.settings.action == "PULL":
+                                    self.__syncPullTransferChunked(currentPosition, i)
 
-            # Progress indication
-            if self.settings.showProgress:
-                logProgress('SYNC progress: %.2f%%' % (100.0 * currentPosition / self.syncSize,))
+                        # In case of PULL we used to write chunks in "random" positions, so we should return to expected pos
+                        self.localFile.seek(currentPosition + length)
+
+                blockIndex += 1
+
+                # Periodic fsync of bitmap
+                if self.bitmapFile and self.settings.updateBitmap:
+                    current_time = time.time()
+                    if current_time - last_fsync_time >= FSYNC_TIME_INTERVAL:
+                        if self.settings.debug:
+                            logDebug(f'Periodic bitmap fsync after {current_time - last_fsync_time:.1f}s')
+                        self.bitmapFile.flush()
+                        os.fsync(self.bitmapFile.fileno())
+                        last_fsync_time = current_time
+
+                # Progress indication
+                if self.settings.showProgress:
+                    logProgress('SYNC progress: %.2f%%' % (100.0 * currentPosition / self.syncSize,))
+
+        finally:
+            if self.bitmapFile and self.settings.updateBitmap:
+                if self.settings.debug:
+                    logDebug('Final bitmap fsync')
+                self.bitmapFile.flush()
+                os.fsync(self.bitmapFile.fileno())
 
     def doBSync(self):
         """Performs synchronization using bitmap file for comparison."""
-        import time
-        
         getChunk = lambda n: buf[self.settings.chunkSize * n:min(length, self.settings.chunkSize * (n + 1))]
 
         FSYNC_TIME_INTERVAL = 5.0  # seconds
@@ -1002,7 +1044,7 @@ class Syncer:
 
     def doCopy(self):
         """Perform COPY operation: transfer all data block-by-block.
-        
+
         Copies entire device contents from source to destination with compression.
         """
         # Copying data block-by-block with compression
@@ -1025,14 +1067,18 @@ class Syncer:
                 logProgress('COPY progress: %.2f%%' % (100.0 * currentPosition / self.syncSize,))
 
     def _syncCheckStep(self):
-        """Perform single sync check step: compare local and remote block hashes.
-        
+        """Compare hashes of one buffer-sized block on local and remote devices.
+
+        Also returns the source digest (local for PUSH, remote for PULL)
+        for optional bitmap update.
+
         Returns:
-            Tuple of (match, buffer, position, length) where:
+            Tuple of (match, buffer, position, length, sourceDigest) where:
                 match: True if hashes match
                 buffer: local data buffer
                 position: current position in device
                 length: length of data read
+                sourceDigest: hash of source side (local for PUSH, remote for PULL)
         """
         currentPosition = self.localFile.tell()
         length = min(self.settings.bufferSize, self.syncSize - currentPosition)
@@ -1049,11 +1095,17 @@ class Syncer:
         checkCommand(self.remoteIO)
         remoteDigest = self.remoteIO.read(self.settings.digestSize)
 
+        # Determine which side is source for bitmap purposes
+        if self.settings.action == "PUSH":
+            sourceDigest = localDigest
+        else:  # PULL
+            sourceDigest = remoteDigest
+
         if self.settings.debug:
             logDebug('Checking pos %d. Local hash is %s, remote is %s' % (currentPosition,
                                                                           byteToHex(localDigest),
                                                                           byteToHex(remoteDigest)))
-        return remoteDigest == localDigest, buf, currentPosition, length
+        return remoteDigest == localDigest, buf, currentPosition, length, sourceDigest
 
     def _bsyncCheckStep(self, blockIndex):
         """Check step for bitmap sync: compare source hash with bitmap hash.

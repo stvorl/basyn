@@ -79,11 +79,20 @@ Options (* for mandatory, = for value):
                         and --local for PULL). In this case, the bitmap file will simply be updated by source device 
                         hashes, without writing any data to destination device.
                       - Can only be used with --mode=SYNC.
-       --reset-bitmap - Force reset (recreate) the bitmap file before sync. The existing bitmap will be truncated and
-                      started from scratch. Use this when you want to rebuild the bitmap
-                      completely, when switching to a different destination device, or when you suspect the bitmap
-                      is corrupted or destination changed unattendedly. Requires --bitmap option.
-                      You may also just delete bitmap file manually before running the script.
+       --reset-bitmap - Force reset (recreate) the bitmap file before sync. The existing bitmap will be
+                      started from scratch (all blocks marked as changed). Use this when you want to rebuild the
+                      bitmap completely, when switching to a different destination device, or when you suspect the
+                      destination or bitmap were heavily corrupted by independent write, and you don't want destination
+                      device to be re-read, but don't mind all data to be transferred again.
+                      You may also just delete bitmap file manually.
+                      Requires --bitmap option. Cannot be combined with --update-bitmap.
+       --update-bitmap - Perform a regular SYNC (reads both source and destination, transfers only changed blocks),
+                      and simultaneously update the bitmap file with current source hashes. Use this when the
+                      destination device may have been partially modified, the bitmap is out of sync with it, but you want to save
+                      traffic by not transferring unchanged data, and full re-read of destination device isn't a problem.
+                      After this operation, bitmap will accurately reflect the current state of the source device
+                      relative to destination. 
+                      Requires --bitmap option. Cannot be combined with --reset-bitmap.
 
 Exit codes:
   0 - A-OK. Data is identical.
@@ -134,16 +143,21 @@ Using bitmap file to optimize sync (avoids reading destination):
   First sync - creates bitmap:
   basyn -l /dev/sda1 -r /dev/sda1 -h 10.0.0.1 -a PUSH -m SYNC -b /root/sda1.bitmap
 
-  Subsequent syncs - uses existing bitmap:
+  Subsequent syncs - uses existing bitmap (no destination reads):
   basyn -l /dev/sda1 -r /dev/sda1 -h 10.0.0.1 -a PUSH -m SYNC -b /root/sda1.bitmap
 
   Update bitmap only (no destination device writing):
   basyn -l /dev/sda1 -m SYNC -b /root/sda1.bitmap -a PUSH
 
-  Force rebuild bitmap from scratch:
+  Force full resync and bitmap rebuild (destination is NOT read, all blocks transferred):
+  Use when: bitmap is suspected corrupted, switching destination device, or wanting a clean baseline.
   basyn -l /dev/sda1 -r /dev/sda1 -h 10.0.0.1 -a PUSH -m SYNC -b /root/sda1.bitmap --reset-bitmap
 
-  Use case: after switching destination device, reset bitmap to match new destination:
+  Resync with bitmap update (destination IS read, only changed blocks transferred):
+  Use when: destination was independently modified and bitmap no longer reflects its state.
+  basyn -l /dev/sda1 -r /dev/sda1 -h 10.0.0.1 -a PUSH -m SYNC -b /root/sda1.bitmap --update-bitmap
+
+  Use case: switching to a new destination device, force full copy and record baseline:
   basyn -l /dev/sda1 -r /dev/new_device -h 10.0.0.1 -a PUSH -m SYNC -b /root/sda1.bitmap --reset-bitmap
 
 NOTES:
@@ -176,8 +190,15 @@ In fact, it may be even lower due to some issues with the script's asynchronous 
    - Bitmap files reduce I/O operations by eliminating destination device reads and exchanging of hashes, making sync operations faster, especially for slow devices or high-latency network connections.
    - When using bitmaps, only the source device is read and compared against stored hashes. Changed blocks are written to the destination (if specified).
    - Bitmap files can be used for tracking changes without a destination device, allowing you to monitor which blocks have changed over time.
-   - Use --reset-bitmap flag to force recreation of the bitmap file. This is useful when:
+   - Use --reset-bitmap flag to force recreation of the bitmap file. This transfers all data without reading
+     destination. Useful when:
      * Switching to a different destination device
      * Suspecting bitmap corruption or desynchronization
      * Wanting to establish a new baseline after major changes
      * Troubleshooting sync issues related to bitmap state
+   - Use --update-bitmap flag to perform a regular SYNC while updating the bitmap simultaneously. This reads
+     both source and destination, transfers only differing blocks, and records current source hashes into the
+     bitmap. Useful when:
+     * Destination was modified independently (e.g., partial manual restore, storage error)
+     * You want the bitmap to be back in sync after an out-of-band destination change
+     * Cannot or don't want to do a full --reset-bitmap (which ignores destination entirely)
