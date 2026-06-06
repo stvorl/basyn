@@ -1,0 +1,369 @@
+#!/usr/bin/env python3
+
+# Copyright (C) 2025
+#
+# Stan Orlov <stvor768@gmail.com>
+#
+# This is a utility for managing basyn bitmap files.
+# It allows to inspect and modify bitmap file parameters.
+#
+# Permission to use, copy, modify, and/or distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+# ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+# ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+# OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+import sys
+import struct
+import hashlib
+import os
+
+# Magic number for bitmap file validation
+BITMAP_MAGIC_NUMBER = 239840023593485091
+
+# Hash function ID to name mapping
+HASH_FUNCTIONS = {
+    0: "sha1",
+    1: "sha224",
+    2: "sha256",
+    3: "sha384",
+    4: "sha512",
+    5: "blake2b",
+    6: "blake2s",
+    7: "md5"
+}
+
+# Bitmap file header format: Magic(8) + DeviceSize(8) + BufferSize(8) + HashID(1) = 25 bytes
+HEADER_FORMAT = "<Q Q Q B"
+HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
+
+
+class BitmapError(Exception):
+    """Exception raised for bitmap file errors."""
+    pass
+
+
+def readBitmapHeader(filepath):
+    """Read and parse bitmap file header.
+    
+    Args:
+        filepath: Path to bitmap file.
+        
+    Returns:
+        Tuple of (magic, deviceSize, bufferSize, hashId).
+        
+    Raises:
+        BitmapError: If file is too small or invalid.
+    """
+    if not os.path.exists(filepath):
+        raise BitmapError(f"Bitmap file not found: {filepath}")
+    
+    with open(filepath, "rb") as f:
+        headerData = f.read(HEADER_SIZE)
+        
+    if len(headerData) < HEADER_SIZE:
+        raise BitmapError("Bitmap file is too small to contain a valid header")
+    
+    magic, deviceSize, bufferSize, hashId = struct.unpack(HEADER_FORMAT, headerData)
+    
+    return magic, deviceSize, bufferSize, hashId
+
+
+def getHashDigestSize(hashId):
+    """Get digest size for given hash function ID.
+    
+    Args:
+        hashId: Hash function ID.
+        
+    Returns:
+        Digest size in bytes.
+        
+    Raises:
+        BitmapError: If hash ID is unknown.
+    """
+    if hashId not in HASH_FUNCTIONS:
+        raise BitmapError(f"Unknown hash function ID: {hashId}")
+    
+    hashName = HASH_FUNCTIONS[hashId]
+    return hashlib.new(hashName).digest_size
+
+
+def calculateNumBlocks(deviceSize, bufferSize):
+    """Calculate number of blocks (hashes) for given device and buffer size.
+    
+    Args:
+        deviceSize: Size of device in bytes.
+        bufferSize: Size of buffer in bytes.
+        
+    Returns:
+        Number of blocks.
+    """
+    return (deviceSize + bufferSize - 1) // bufferSize
+
+
+def actionInfo(filepath):
+    """Display information about bitmap file.
+    
+    Args:
+        filepath: Path to bitmap file.
+        
+    Returns:
+        Exit code (0 on success, 1 on error).
+    """
+    try:
+        magic, deviceSize, bufferSize, hashId = readBitmapHeader(filepath)
+        
+        # Validate magic number
+        if magic != BITMAP_MAGIC_NUMBER:
+            print(f"ERROR: Invalid bitmap file signature!")
+            print(f"Expected magic number: {BITMAP_MAGIC_NUMBER}")
+            print(f"Found magic number: {magic}")
+            return 1
+        
+        # Get hash function name and digest size
+        hashName = HASH_FUNCTIONS.get(hashId, f"Unknown({hashId})")
+        try:
+            digestSize = getHashDigestSize(hashId)
+        except BitmapError:
+            digestSize = "Unknown"
+        
+        # Calculate number of blocks
+        numBlocks = calculateNumBlocks(deviceSize, bufferSize)
+        
+        # Get actual file size
+        fileSize = os.path.getsize(filepath)
+        expectedSize = HEADER_SIZE + numBlocks * digestSize if isinstance(digestSize, int) else "Unknown"
+        
+        # Display information
+        print("=== Bitmap File Information ===")
+        print(f"File: {filepath}")
+        print(f"Magic number: {magic} (OK)" if magic == BITMAP_MAGIC_NUMBER else f"Magic number: {magic} (INVALID)")
+        print(f"Device size: {deviceSize} bytes ({deviceSize / (1024**3):.2f} GB)")
+        print(f"Buffer size: {bufferSize} bytes ({bufferSize / 1024:.0f} KB)")
+        print(f"Hash function: {hashName} (ID: {hashId})")
+        if isinstance(digestSize, int):
+            print(f"Hash digest size: {digestSize} bytes")
+        print(f"Number of blocks: {numBlocks}")
+        print(f"Actual file size: {fileSize} bytes")
+        if isinstance(expectedSize, int):
+            print(f"Expected file size: {expectedSize} bytes")
+            if fileSize != expectedSize:
+                print(f"WARNING: File size mismatch! (difference: {fileSize - expectedSize} bytes)")
+        
+        return 0
+        
+    except BitmapError as e:
+        print(f"ERROR: {e}")
+        return 1
+    except Exception as e:
+        print(f"ERROR: Unexpected error: {e}")
+        return 1
+
+
+def actionTunesize(filepath, newSize):
+    """Adjust device size in bitmap file.
+    
+    Args:
+        filepath: Path to bitmap file.
+        newSize: New device size in bytes.
+        
+    Returns:
+        Exit code (0 on success, 1 on error).
+    """
+    try:
+        # Read current header
+        magic, oldDeviceSize, bufferSize, hashId = readBitmapHeader(filepath)
+        
+        # Validate magic number
+        if magic != BITMAP_MAGIC_NUMBER:
+            print(f"ERROR: Invalid bitmap file signature!")
+            return 1
+        
+        # Get hash digest size
+        digestSize = getHashDigestSize(hashId)
+        
+        # Calculate old and new number of blocks
+        oldNumBlocks = calculateNumBlocks(oldDeviceSize, bufferSize)
+        newNumBlocks = calculateNumBlocks(newSize, bufferSize)
+        
+        print(f"Current device size: {oldDeviceSize} bytes ({oldDeviceSize / (1024**3):.2f} GB)")
+        print(f"New device size: {newSize} bytes ({newSize / (1024**3):.2f} GB)")
+        print(f"Buffer size: {bufferSize} bytes ({bufferSize / 1024:.0f} KB)")
+        print(f"Current number of blocks: {oldNumBlocks}")
+        print(f"New number of blocks: {newNumBlocks}")
+        
+        if oldNumBlocks == newNumBlocks:
+            # Same number of blocks - just update device size in header
+            print("\nNumber of blocks remains the same. Only updating device size in header...")
+            
+            with open(filepath, "r+b") as f:
+                # Write new header with updated device size
+                newHeader = struct.pack(HEADER_FORMAT, magic, newSize, bufferSize, hashId)
+                f.seek(0)
+                f.write(newHeader)
+            
+            print("Device size updated successfully!")
+            return 0
+        else:
+            # Different number of blocks - need to adjust hash data
+            print(f"\nNumber of blocks will change: {oldNumBlocks} -> {newNumBlocks}")
+            
+            if newNumBlocks < oldNumBlocks:
+                print(f"The bitmap will be truncated by {oldNumBlocks - newNumBlocks} blocks.")
+            else:
+                print(f"The bitmap will be extended by {newNumBlocks - oldNumBlocks} blocks (filled with zeros).")
+            
+            # Ask for confirmation
+            response = input("\nDo you want to change the number of hashes in the bitmap? (yes/no): ").strip().lower()
+            
+            if response not in ('yes', 'y', 'да', 'д'):
+                print("Operation cancelled.")
+                return 0
+            
+            # Modify the bitmap file
+            with open(filepath, "r+b") as f:
+                # Write new header
+                newHeader = struct.pack(HEADER_FORMAT, magic, newSize, bufferSize, hashId)
+                f.seek(0)
+                f.write(newHeader)
+                
+                if newNumBlocks < oldNumBlocks:
+                    # Truncate file
+                    newFileSize = HEADER_SIZE + newNumBlocks * digestSize
+                    f.truncate(newFileSize)
+                    print(f"Bitmap truncated to {newNumBlocks} blocks.")
+                else:
+                    # Extend file with zero hashes
+                    f.seek(0, 2)  # Go to end of file
+                    extraBlocks = newNumBlocks - oldNumBlocks
+                    zeroData = bytes(extraBlocks * digestSize)
+                    f.write(zeroData)
+                    print(f"Bitmap extended with {extraBlocks} zero-filled blocks.")
+            
+            print("Bitmap adjusted successfully!")
+            return 0
+        
+    except BitmapError as e:
+        print(f"ERROR: {e}")
+        return 1
+    except ValueError as e:
+        print(f"ERROR: {e}")
+        return 1
+    except Exception as e:
+        print(f"ERROR: Unexpected error: {e}")
+        return 1
+
+
+def printUsage():
+    """Print usage information."""
+    print("""
+Usage: basyn-bitmap <bitmap_file> -a <action> [options]
+
+Actions:
+  info              - Display information about the bitmap file
+                      Shows header details including magic number, device size,
+                      buffer size, hash function, and number of blocks
+                      
+  tunesize <size>   - Adjust device size in the bitmap file
+                      <size> - new device size in bytes
+                      
+                      If the number of blocks remains the same, only the device
+                      size in the header is updated.
+                      
+                      If the number of blocks changes, you will be asked whether
+                      to adjust the hash data:
+                      - If reducing: hashes will be truncated
+                      - If increasing: new zero-filled hashes will be appended
+
+Options:
+  -a, --action      - Action to perform (info or tunesize)
+
+Examples:
+  # Display bitmap information
+  basyn-bitmap /root/sda1.bitmap -a info
+  
+  # Change device size to 1TB (1099511627776 bytes)
+  basyn-bitmap /root/sda1.bitmap -a tunesize 1099511627776
+  
+  # Change device size to 500GB
+  basyn-bitmap /root/sda1.bitmap -a tunesize 536870912000
+
+Exit codes:
+  0 - Success
+  1 - Error (invalid file, bad magic number, etc.)
+""")
+
+
+def main():
+    """Main entry point for basyn-bitmap utility."""
+    if len(sys.argv) < 2:
+        printUsage()
+        return 1
+    
+    # Parse command line arguments
+    if sys.argv[1] in ('-h', '--help', 'help'):
+        printUsage()
+        return 0
+    
+    if len(sys.argv) < 4:
+        print("ERROR: Missing required arguments")
+        printUsage()
+        return 1
+    
+    bitmapFile = sys.argv[1]
+    
+    # Parse action
+    action = None
+    actionArg = None
+    
+    i = 2
+    while i < len(sys.argv):
+        if sys.argv[i] in ('-a', '--action'):
+            if i + 1 >= len(sys.argv):
+                print("ERROR: Missing action value")
+                return 1
+            action = sys.argv[i + 1]
+            i += 2
+            
+            # Check if tunesize action has size argument
+            if action == 'tunesize':
+                if i >= len(sys.argv):
+                    print("ERROR: tunesize action requires size argument")
+                    return 1
+                try:
+                    actionArg = int(sys.argv[i])
+                    i += 1
+                except ValueError:
+                    print("ERROR: Invalid size value (must be integer)")
+                    return 1
+        else:
+            print(f"ERROR: Unknown option: {sys.argv[i]}")
+            return 1
+    
+    if not action:
+        print("ERROR: Action not specified")
+        printUsage()
+        return 1
+    
+    # Execute action
+    if action == 'info':
+        return actionInfo(bitmapFile)
+    elif action == 'tunesize':
+        if actionArg is None:
+            print("ERROR: tunesize action requires size argument")
+            return 1
+        return actionTunesize(bitmapFile, actionArg)
+    else:
+        print(f"ERROR: Unknown action: {action}")
+        printUsage()
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
