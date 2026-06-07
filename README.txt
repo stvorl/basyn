@@ -32,6 +32,12 @@ To avoid confusion in role-swapping scenarios, devices are also referred below t
 
 INSTALLATION:
 
+One-liner (downloads scripts into /opt/basyn and symlinks into /usr/local/sbin):
+    curl -fsSL https://raw.githubusercontent.com/stvorl/basyn/master/install.sh | sudo bash
+
+To update later:
+    sudo /opt/basyn/install.sh
+
 Required software:
     Local machine: Python interpreter and SSH client
     Remote machine: Python interpreter and SSH server
