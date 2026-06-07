@@ -39,9 +39,8 @@ To update later:
     sudo /opt/basyn/install.sh
 
 Required software:
-    Local machine: Python interpreter and SSH client
-    Remote machine: Python interpreter and SSH server
-Place the script on the local machine in any convenient directory.
+    Local machine: Python interpreter, SSH client, curl
+    Remote machine: Python interpreter, SSH server
 Ensure that both local and remote users have the necessary read/write permissions for the relevant devices.
 It is strongly recommended to use certificate-based SSH authentication to avoid interactive password prompts during execution.
 
@@ -208,3 +207,26 @@ In fact, it may be even lower due to some issues with the script's asynchronous 
      * Destination was modified independently (e.g., partial manual restore, storage error)
      * You want the bitmap to be back in sync after an out-of-band destination change
      * Cannot or don't want to do a full --reset-bitmap (which ignores destination entirely)
+
+
+BASYN-BITMAP UTILITY:
+
+basyn-bitmap is a companion tool for inspecting and adjusting bitmap files used by basyn.
+
+USAGE:
+
+basyn-bitmap <bitmap_file> -a <action> [options]
+
+Actions:
+  info              - Display bitmap header: magic number, device size, buffer size,
+                      hash function, block count, and file size sanity check.
+  tunesize <bytes>  - Change the device size recorded in the bitmap header.
+                      If the block count stays the same, only the header is updated.
+                      If it changes, you will be prompted before hashes are
+                      truncated or extended (zero-filled).
+
+Examples:
+  basyn-bitmap /root/sda1.bitmap -a info
+  basyn-bitmap /root/sda1.bitmap -a tunesize 1099511627776
+
+Exit codes: 0 = success, 1 = error (bad file, invalid magic, etc.)
