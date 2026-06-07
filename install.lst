@@ -1,0 +1,5 @@
+# Files to install with permissions. Ones with executable bits get symlinked into /usr/local/sbin
+754 basyn
+754 basyn-bitmap
+644 README.txt
+644 LICENSE
